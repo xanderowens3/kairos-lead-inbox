@@ -6,7 +6,11 @@
    ========================================================================== */
 let cache = [];
 
+// serialize writes; reads wait for them (see leads.js for the rationale)
+let writeChain = Promise.resolve();
+
 export async function loadSchedules(){
+  await writeChain;
   const r = await fetch('/data/schedules');
   cache = r.ok ? await r.json() : [];
   if (!Array.isArray(cache)) cache = [];
@@ -15,12 +19,13 @@ export async function loadSchedules(){
 export function allSchedules(){ return cache; }
 export function schedulesForOffer(offerId){ return cache.filter(s => s.offerId === offerId); }
 
-async function persist(){
-  const r = await fetch('/data/schedules', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(cache)
-  });
-  return r.ok;
+function persist(){
+  writeChain = writeChain.then(() =>
+    fetch('/data/schedules', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(cache)
+    }).then(r => r.ok).catch(() => false));
+  return writeChain;
 }
 
 export async function addSchedule(rec){

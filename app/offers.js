@@ -19,7 +19,11 @@ export const blankOffer = () => ({
 
 let cache = [];
 
+// serialize writes; reads wait for them (see leads.js for the rationale)
+let writeChain = Promise.resolve();
+
 export async function loadOffers(){
+  await writeChain;
   const r = await fetch('/data/offers');
   cache = r.ok ? await r.json() : [];
   if (!Array.isArray(cache)) cache = [];
@@ -28,14 +32,14 @@ export async function loadOffers(){
 export function offers(){ return cache; }
 export function offerById(id){ return cache.find(o => o.id === id); }
 
-export async function saveOffers(list){
+export function saveOffers(list){
   cache = list;
-  const r = await fetch('/data/offers', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(list)
-  });
-  return r.ok;
+  writeChain = writeChain.then(() =>
+    fetch('/data/offers', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(list)
+    }).then(r => r.ok).catch(() => false));
+  return writeChain;
 }
 
 export async function upsertOffer(offer){

@@ -18,17 +18,16 @@ export function leadsForIcp(icpId){
     .sort((a, b) => (b.score - a.score) || (new Date(b.analyzedAt) - new Date(a.analyzedAt)));
 }
 
-// In-flight optimistic changes, so a background refetch can't resurrect a lead
-// the user just deleted or un-inbox a lead they just marked contacted.
-const pendingDeletes = new Set();
-const pendingContacts = new Set();
+// Serialize writes, and make every read wait for pending writes to land first.
+// Without this, a background refetch triggered right after a delete can read the
+// server BEFORE the delete's PUT commits and resurrect the lead.
+let writeChain = Promise.resolve();
 
 export async function loadLeads(){
+  await writeChain;                        // never read ahead of an in-flight write
   const r = await fetch('/data/leads');
   let data = r.ok ? await r.json() : [];
   if (!Array.isArray(data)) data = [];
-  if (pendingDeletes.size) data = data.filter(l => !pendingDeletes.has(l.id));
-  if (pendingContacts.size) for (const l of data) if (pendingContacts.has(l.id)) l.contacted = true;
   cache = data;
   return cache;
 }
@@ -36,12 +35,15 @@ export function loaded(){ return cache.length > 0; }
 export function allLeads(){ return cache; }
 export function leadById(id){ return cache.find(l => l.id === id); }
 
-async function persist(){
-  const r = await fetch('/data/leads', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(cache)
-  });
-  return r.ok;
+function persist(){
+  // queue behind any prior write; each write PUTs the whole (current) cache
+  writeChain = writeChain.then(() =>
+    fetch('/data/leads', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(cache)
+    }).then(r => r.ok).catch(() => false)
+  );
+  return writeChain;
 }
 
 /* Recommended leads, most recent first (tiebroken by score). */
@@ -64,10 +66,7 @@ export async function markContacted(id){
   if (!l) return false;
   l.contacted = true;
   l.contactedAt = new Date().toISOString();
-  pendingContacts.add(id);
-  const ok = await persist();
-  pendingContacts.delete(id);
-  return ok;
+  return persist();
 }
 
 /* Promote a below-threshold lead into the inbox (or undo it). */
@@ -91,10 +90,7 @@ export async function pinGolden(id, on = true){
 export async function deleteLead(id){
   const i = cache.findIndex(l => l.id === id);
   if (i >= 0) cache.splice(i, 1);
-  pendingDeletes.add(id);
-  const ok = await persist();
-  pendingDeletes.delete(id);
-  return ok;
+  return persist();
 }
 
 /* Rate a lead — feeds future analysis runs as a few-shot example.
