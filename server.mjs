@@ -279,20 +279,36 @@ async function createSearch(payload){
   });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body?.error?.message || `Trigify ${r.status}`);
-  return body?.data?.id;
+  const id = body?.data?.id;
+  // Never return undefined: an unrecorded searchId would make the next tick
+  // create a second, duplicate search for the same schedule.
+  if (!id) throw new Error('Trigify created the search but returned no id');
+  return id;
 }
 
-/* A just-created search has no results for a short while. Poll until some land
-   (or we give up), so the first analysis has something to score. */
-async function waitForResults(searchId, tries = 9, delayMs = 10000){
-  for (let i = 0; i < tries; i++){
+/* Trigify fills a search in over time, so the first result landing does NOT mean
+   collection is done. Wait until the count stops growing (or we time out), so a
+   run scores everything it collected instead of only the early arrivals. */
+async function waitForCollection(searchId, { maxMs = 8*60*1000, pollMs = 10000, stableFor = 3 } = {}){
+  const started = Date.now();
+  let last = -1, stable = 0;
+  while (Date.now() - started < maxMs){
+    let count = 0;
     try {
-      const rows = (await tg(`/searches/${searchId}/results?limit=1`))?.data;
-      if (Array.isArray(rows) && rows.length) return true;
+      const rows = (await tg(`/searches/${searchId}/results?limit=100`))?.data;
+      count = Array.isArray(rows) ? rows.length : 0;
     } catch { /* keep polling */ }
-    await new Promise(r => setTimeout(r, delayMs));
+    if (count > 0 && count === last){
+      if (++stable >= stableFor){
+        console.log(`  scheduler: collection settled at ${count} posts`);
+        return count;
+      }
+    } else stable = 0;
+    last = count;
+    await new Promise(r => setTimeout(r, pollMs));
   }
-  return false;
+  console.log(`  scheduler: collection wait timed out at ${last} posts — scoring what landed`);
+  return last;
 }
 
 async function runDueSchedule(sch, schedules){
@@ -320,10 +336,12 @@ async function runDueSchedule(sch, schedules){
         off.icpThresholds = { ...(off.icpThresholds || {}), [id]: sch.minScore };
       await saveOffers(offers);
     }
-    console.log(`  scheduler: created ICP "${sch.name}" → ${id}, waiting for first results…`);
-    await mark('collecting');
-    await waitForResults(id);
+    console.log(`  scheduler: created ICP "${sch.name}" → ${id}`);
   }
+  // Every run waits for collection to settle first, so a single run scores
+  // everything it gathered rather than only the posts that had landed early.
+  await mark('collecting');
+  await waitForCollection(sch.searchId);
   sch.lastRunAt = new Date().toISOString();
 
   if (!anthropic){
@@ -442,8 +460,22 @@ const server = createServer(async (req, res) => {
     if (req.method === 'PUT') {
       const body = await readBody(req);
       if (!Array.isArray(body)) return send(res, 400, JSON.stringify({ error:'expected an array' }));
-      await saveSchedules(body);
-      return send(res, 200, JSON.stringify({ ok:true, count: body.length }));
+      /* The scheduler owns run state. A client PUT sends back whatever array it
+         loaded, which may predate a run — accepting it verbatim could reset
+         searchId to null and make the next tick create a SECOND Trigify search.
+         Keep server-owned fields; the client may only add or remove schedules. */
+      const OWNED = ['searchId','status','runState','progress','warming','warmups',
+                     'nextRun','lastRunAt','lastError','lastAnalyzed','lastRecommended'];
+      const byId = Object.fromEntries((await getSchedules()).map(s => [s.id, s]));
+      const merged = body.map(s => {
+        const srv = byId[s.id];
+        if (!srv) return s;                       // genuinely new schedule
+        const out = { ...s };
+        for (const k of OWNED) if (k in srv) out[k] = srv[k];
+        return out;
+      });
+      await saveSchedules(merged);
+      return send(res, 200, JSON.stringify({ ok:true, count: merged.length }));
     }
     return send(res, 405, JSON.stringify({ error:'method not allowed' }));
   }

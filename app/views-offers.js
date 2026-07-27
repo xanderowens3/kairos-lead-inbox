@@ -65,11 +65,10 @@ export function scheduleStripHTML(sc){
               : sc.runState === 'error' ? 'err' : 'active';
   const stateLabel = { warming:'Collecting', analyzing:'Analyzing', err:'Needs attention', active:'Ready' }[state];
 
-  const p = sc.progress;
   const body = running
     ? (sc.runState === 'collecting'
-        ? `Collecting posts from Trigify — scoring starts as soon as they land.`
-        : `Scoring ${p?.total ? `<b>${p.done ?? 0}</b> of <b>${p.total}</b>` : 'posts'} — leads appear once all are done.`)
+        ? `Collecting posts from Trigify — scoring starts once collection finishes.`
+        : `Scoring every collected post — leads appear in your inbox once all are done.`)
     : `Runs <b>${label}</b> <span class="strip-sep">·</span> next <b>${fmtWhen(sc.nextRun)}</b>` + (
         sc.lastRunAt
           ? (sc.lastError
