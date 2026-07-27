@@ -6,7 +6,7 @@ import { TYPES, PLATFORMS, ICONS, FREQUENCY, TIME_FRAME, LI_SORT, LI_CONTENT,
 import { loadOffers, offers, offerById, attachSearch, detachSearch,
          thresholdFor, setThreshold, offerForSearch, DEFAULT_MIN_SCORE } from './offers.js';
 import { addSchedule, loadSchedules, allSchedules, cancelSchedule } from './schedules.js';
-import { initOffers, renderOffers, renderOffer, scheduleStripHTML } from './views-offers.js';
+import { initOffers, renderOffers, renderOffer, scheduleStripHTML, isRunning } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads, openLeadDrawer } from './views-leads.js';
 import { loadLeads, countInbox, allLeads, isRecommended, leadById } from './leads.js';
 import { confirmDialog } from './modal.js';
@@ -604,7 +604,8 @@ async function openIcp(id, view, refresh){
   if (icpOpen[id] && (icpView[id] || 'results') === view){ icpOpen[id] = false; return refresh(); }
   icpOpen[id] = true;
   icpView[id] = view;
-  if (view === 'results') await loadLeads();          // results show each post's score
+  // results show each post's score, and hide the list while a run is in flight
+  if (view === 'results') await Promise.all([loadLeads(), loadSchedules()]);
   if (view === 'results' && !results[id]){
     icpLoading[id] = true; await refresh();
     const { ok, body } = await api(`/searches/${id}/results?limit=100`);
@@ -618,6 +619,22 @@ async function openIcp(id, view, refresh){
    agent has judged it. Scored posts rank first (highest score at the top) with
    the inbox line drawn at the ICP's threshold; unscored posts follow. */
 function resultsHTML(rows, query, icpId){
+  /* Mid-run the picture is incomplete — leads are written only when every post
+     has been scored. Show the run state instead of a half-populated list. */
+  const sc = allSchedules().find(s => s.searchId === icpId);
+  if (sc && isRunning(sc)){
+    const collecting = sc.runState === 'collecting';
+    return `<div class="res-running">
+      <span class="strip-spin"></span>
+      <div>
+        <div class="rr-h">${collecting ? 'Collecting posts…' : 'Still analyzing…'}</div>
+        <p>${collecting
+          ? 'Waiting for Trigify to finish collecting. Scoring starts once it settles.'
+          : 'The agent is scoring every collected post. They all appear here — and in your inbox — once the run finishes.'}</p>
+      </div>
+    </div>`;
+  }
+
   const off = offerForSearch(icpId);
   const thr = thresholdFor(icpId);
   /* Scores are keyed by POST, not by ICP. A post is scored once per offer (the
@@ -812,7 +829,16 @@ function paintList(){
     toast(created ? 'Schedule stopped' : 'Schedule cancelled');
     refreshInboxCount(); renderList();
   }));
+
+  // keep the list live while a run is in flight so it settles on its own
+  clearTimeout(listPoll);
+  if (allSchedules().some(isRunning)){
+    listPoll = setTimeout(() => {
+      if ($('#main')?.dataset.view === 'list') renderList();
+    }, 8000);
+  }
 }
+let listPoll = null;
 
 async function loadCredits(){
   const { ok, status, body } = await api('/usage');

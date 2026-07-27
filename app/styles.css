@@ -681,6 +681,13 @@ textarea::placeholder{color:var(--faint)}
 .fbb.gold{flex:0 0 auto;min-width:44px;color:#C08A00}
 .fbb.gold.on{background:#FDF4DE;border-color:#E7C766;color:#C08A00}
 
+/* mid-run placeholder in an ICP's Results tab */
+.res-running{display:flex;align-items:flex-start;gap:14px;padding:26px 20px;
+  background:#F1ECFD;border:1px solid #D6C9F5;border-radius:12px}
+.res-running .strip-spin{margin-top:2px}
+.res-running .rr-h{font-family:var(--serif);font-size:16px;font-weight:700;color:#4B3391}
+.res-running p{font-size:12.5px;color:var(--muted);line-height:1.55;margin-top:4px;max-width:52ch}
+
 /* scoring shown inside the Results list */
 .res-score{flex-shrink:0;min-width:30px;height:26px;border-radius:7px;display:inline-flex;
   align-items:center;justify-content:center;padding:0 7px;font-family:var(--serif);font-size:14px;
