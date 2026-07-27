@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { judgeBatch, BATCH, MODEL } from './app/qualify-core.mjs';
 import { verifyResults } from './app/schema.js';
+import { initDb, usingDb, getOffers, saveOffers, getLeads, saveLeads,
+         getProfiles, saveProfiles } from './db.mjs';
 
 /* $ per million tokens [input, output]. Sonnet 5 intro pricing runs to 2026-08-31. */
 const RATES = {
@@ -70,7 +72,7 @@ const tg = async path => {
    location and summary — the fields the qualifiers/disqualifiers actually need.
    Cached to disk by URL (incl. failures, as null) so re-runs don't re-fetch. */
 let profileCache = null;
-const getProfileCache = async () => (profileCache ??= await loadJSON(PROFILES, {}));
+const getProfileCache = async () => (profileCache ??= await getProfiles());
 
 async function enrichProfile(url){
   if (!url || !/linkedin\.com\/in\//i.test(url)) return null;   // people only, not company pages
@@ -98,12 +100,12 @@ async function enrichProfile(url){
 /* ---------- analysis: score an offer's new posts ---------- */
 async function analyzeOffer(offerId, maxPosts){
   if (!anthropic) return { error: 'ANTHROPIC_API_KEY not set on the server' };
-  const offers = await loadJSON(OFFERS, []);
+  const offers = await getOffers();
   const offer = offers.find(o => o.id === offerId);
   if (!offer) return { error: 'offer not found' };
   if (!(offer.searchIds || []).length) return { error: 'offer has no ICPs' };
 
-  const leadsStore = await loadJSON(LEADS, []);
+  const leadsStore = await getLeads();
   const already = new Set(leadsStore.map(l => l.postId));
 
   /* gather new posts across the offer's ICPs, honouring the local keyword re-check */
@@ -164,8 +166,8 @@ async function analyzeOffer(offerId, maxPosts){
       if (v.recommend) recommended++;
     }
   }
-  await saveJSON(LEADS, leadsStore);
-  if (profileCache) await saveJSON(PROFILES, profileCache);
+  await saveLeads(leadsStore);
+  if (profileCache) await saveProfiles(profileCache);
   const creditsAfter = (await tg('/usage'))?.data?.credits?.total_consumed ?? creditsBefore;
   const enrichCredits = creditsAfter - creditsBefore;
   const cost = priceOf(inTok, outTok);
@@ -175,16 +177,16 @@ async function analyzeOffer(offerId, maxPosts){
            cost: +cost.toFixed(4), enrichCredits, cacheRead };
 }
 
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
   /* ---------- offer store ---------- */
   if (url.pathname === '/data/offers') {
-    if (req.method === 'GET') return send(res, 200, JSON.stringify(await loadJSON(OFFERS, [])));
+    if (req.method === 'GET') return send(res, 200, JSON.stringify(await getOffers()));
     if (req.method === 'PUT') {
       const body = await readBody(req);
       if (!Array.isArray(body)) return send(res, 400, JSON.stringify({ error:'expected an array' }));
-      await saveJSON(OFFERS, body);
+      await saveOffers(body);
       return send(res, 200, JSON.stringify({ ok:true, count: body.length }));
     }
     return send(res, 405, JSON.stringify({ error:'method not allowed' }));
@@ -192,11 +194,11 @@ createServer(async (req, res) => {
 
   /* ---------- leads store ---------- */
   if (url.pathname === '/data/leads') {
-    if (req.method === 'GET') return send(res, 200, JSON.stringify(await loadJSON(LEADS, [])));
+    if (req.method === 'GET') return send(res, 200, JSON.stringify(await getLeads()));
     if (req.method === 'PUT') {
       const body = await readBody(req);
       if (!Array.isArray(body)) return send(res, 400, JSON.stringify({ error:'expected an array' }));
-      await saveJSON(LEADS, body);
+      await saveLeads(body);
       return send(res, 200, JSON.stringify({ ok:true, count: body.length }));
     }
     return send(res, 405, JSON.stringify({ error:'method not allowed' }));
@@ -244,9 +246,17 @@ createServer(async (req, res) => {
   } catch {
     return send(res, 404, 'Not found', 'text/plain');
   }
-}).listen(PORT, HOST, () => {
-  console.log(`\n  Kairos → http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
-  console.log(`  offers → ${OFFERS}`);
-  console.log(`  leads  → ${LEADS}`);
+});
+
+try {
+  await initDb();
+  console.log(`\n  storage: ${usingDb ? 'Postgres (DATABASE_URL)' : 'local JSON files (data/)'}`);
+} catch (e) {
+  console.error('  DB init failed:', e.message);
+  process.exit(1);
+}
+
+server.listen(PORT, HOST, () => {
+  console.log(`  Kairos → http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   console.log(`  analysis: ${anthropic ? 'ready (' + MODEL + ')' : 'DISABLED — ANTHROPIC_API_KEY not set'}\n`);
 });
