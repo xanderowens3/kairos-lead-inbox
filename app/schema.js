@@ -133,6 +133,17 @@ export function matchesQuery(text, query){
   return true;
 }
 
+/* True unless the text trips one of the NOT keywords. Analysis uses this so it
+   scores every post Trigify returned EXCEPT genuine exclusions — the qualifier
+   judges relevance on meaning, so loose/partial keyword matches (often the best
+   leads) are not filtered out before Claude sees them. */
+export function passesExclusions(text, query){
+  const not = (query?.keywords_not || []).filter(Boolean);
+  if (!not.length) return true;
+  const t = text || '';
+  return !not.some(term => termRegex(term).test(t));
+}
+
 /* Split a result set into what genuinely matches the query vs what Trigify
    returned anyway. Only meaningful for keyword-mode searches. */
 export function verifyResults(rows, query){

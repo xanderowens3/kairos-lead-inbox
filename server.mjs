@@ -14,7 +14,7 @@ import { extname, join, normalize, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { judgeBatch, BATCH, MODEL } from './app/qualify-core.mjs';
-import { verifyResults } from './app/schema.js';
+import { passesExclusions } from './app/schema.js';
 import { initDb, usingDb, getOffers, saveOffers, getLeads, saveLeads,
          getProfiles, saveProfiles, getSchedules, saveSchedules } from './db.mjs';
 
@@ -161,13 +161,15 @@ async function analyzeOffer(offerId, maxPosts){
   const leadsStore = await getLeads();
   const already = new Set(leadsStore.map(l => l.postId));
 
-  /* gather new posts across the offer's ICPs, honouring the local keyword re-check */
+  /* gather new posts across the offer's ICPs. Score everything Trigify returned
+     except posts that trip a NOT keyword — the qualifier decides relevance, so we
+     don't drop loose keyword matches (often the best leads) before Claude sees them. */
   const fresh = [];
   for (const sid of offer.searchIds){
     const meta = (await tg('/searches/' + sid)).data;
     const rows = (await tg(`/searches/${sid}/results?limit=100`)).data ?? [];
-    const { matched } = verifyResults(rows, meta?.query || {});
-    for (const r of matched){
+    for (const r of rows){
+      if (!passesExclusions(r.content?.text, meta?.query)) continue;
       if (!already.has(r.id)) fresh.push({ ...r, icpId: sid, icpName: meta?.name ?? sid });
     }
   }

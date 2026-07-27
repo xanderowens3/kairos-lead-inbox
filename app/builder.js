@@ -536,18 +536,21 @@ function reviewHTML(icpId){
   const thr = thresholdFor(icpId);
   const attached = !!offerForSearch(icpId);
   if (!attached) return `<div class="res-empty">This ICP isn't attached to an offer, so its posts aren't scored.</div>`;
-  if (!leads.length) return `<div class="res-empty">No posts scored yet. Run analysis on the offer to fill the review queue.</div>`;
   const inInbox = leads.filter(isRecommended).length;
+  // The threshold is always settable — even before any posts are scored — so you
+  // can decide the inbox cutoff up front. The ranked list fills in after analysis.
   return `<div class="rev">
     <div class="rev-thr">
       <div class="rev-thr-txt">
         <label>Inbox threshold</label>
-        <p>Posts scoring <b class="thr-val" data-thrval="${icpId}">${thr}</b> or above go to the inbox
-          &middot; <b>${inInbox}</b> of ${leads.length} qualify now.</p>
+        <p>Posts scoring <b class="thr-val" data-thrval="${icpId}">${thr}</b> or above go to the inbox${
+          leads.length ? ` &middot; <b>${inInbox}</b> of ${leads.length} qualify now` : ''}.</p>
       </div>
       <input type="range" min="0" max="100" step="5" value="${thr}" class="rev-slider" data-thr="${icpId}">
     </div>
-    <div class="rev-list">${leads.map(l => reviewRowHTML(l, thr)).join('')}</div>
+    ${leads.length
+      ? `<div class="rev-list">${leads.map(l => reviewRowHTML(l, thr)).join('')}</div>`
+      : `<div class="res-empty">No posts scored yet — run analysis on the offer to fill this in. Your threshold is saved and will apply.</div>`}
   </div>`;
 }
 
