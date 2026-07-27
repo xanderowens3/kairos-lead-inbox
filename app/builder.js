@@ -4,8 +4,8 @@
 import { TYPES, PLATFORMS, ICONS, FREQUENCY, TIME_FRAME, LI_SORT, LI_CONTENT,
          buildPayload, blank, verifyResults } from './schema.js';
 import { loadOffers, offerById, attachSearch, thresholdFor, setThreshold, offerForSearch } from './offers.js';
-import { addSchedule } from './schedules.js';
-import { initOffers, renderOffers, renderOffer } from './views-offers.js';
+import { addSchedule, loadSchedules, allSchedules, cancelSchedule } from './schedules.js';
+import { initOffers, renderOffers, renderOffer, scheduleStripHTML } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads } from './views-leads.js';
 import { loadLeads, countInbox, leadsForIcp, isRecommended,
          promoteLead, pinGolden, rateLead, leadById } from './leads.js';
@@ -753,7 +753,8 @@ function renderList(){
       <div class="swash"></div>
     </div>
     <div class="scroll"><div class="list-in" id="listBody"><div class="empty"><p>Loading…</p></div></div></div>`;
-  loadSearches()
+  // load offers + schedules too, so ICP cards render exactly as in the offer view
+  Promise.all([loadSearches(), loadOffers(), loadSchedules()])
     .then(() => ensureIcpData(searches.map(s => s.id)))
     .then(paintList);
 }
@@ -771,8 +772,30 @@ function paintList(){
       <p>ICPs are created inside an offer, so the agent knows what to judge them against.</p></div>`;
     return;
   }
-  b.innerHTML = searches.map(rowHTML).join('');
+  // a created scheduled ICP gets the same merged strip it has in the offer view
+  const bySearch = {};
+  allSchedules().forEach(s => { if (s.searchId) bySearch[s.searchId] = s; });
+  b.innerHTML = searches.map(s => {
+    const sc = bySearch[s.id];
+    return sc ? `<div class="icp-unit has-sched">${rowHTML(s)}${scheduleStripHTML(sc)}</div>` : rowHTML(s);
+  }).join('');
   bindRows(paintList);
+  // stop/cancel a schedule from the strip (offer view binds this itself)
+  $$('[data-cancel]').forEach(btn => btn.addEventListener('click', async () => {
+    const sc = allSchedules().find(x => x.id === btn.dataset.cancel);
+    const created = !!sc?.searchId;
+    const ok = await confirmDialog({
+      title: created ? 'Stop this scheduled run?' : 'Cancel this scheduled ICP?',
+      body: created
+        ? 'Automatic runs will stop. The ICP and any leads it has produced stay.'
+        : 'It will not be created or run. You can schedule it again later.',
+      confirm: created ? 'Stop' : 'Cancel it', danger: true
+    });
+    if (!ok) return;
+    await cancelSchedule(btn.dataset.cancel);
+    toast(created ? 'Schedule stopped' : 'Schedule cancelled');
+    refreshInboxCount(); renderList();
+  }));
 }
 
 async function loadCredits(){

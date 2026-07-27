@@ -78,10 +78,11 @@ function paintPage(view){
       confirm: 'Mark contacted'
     });
     if (!ok) return;
-    await markContacted(b.dataset.check);
+    const saved = markContacted(b.dataset.check);   // updates the shared cache synchronously
+    paintPage('inbox');                             // instant re-render from cache — no refetch
     ctx.toast('Marked contacted — moved to All leads');
     ctx.refreshInboxCount?.();
-    renderInbox();   // re-render without the contacted lead
+    await saved;                                    // persist in the background
   }));
   $$('[data-del]').forEach(b => b.addEventListener('click', async e => {
     e.stopPropagation();
@@ -91,12 +92,14 @@ function paintPage(view){
       confirm: 'Delete', danger: true
     });
     if (!ok) return;
-    const wasSelected = selectedId === b.dataset.del;
-    await deleteLead(b.dataset.del);
+    // Splice the shared cache synchronously, then repaint instantly from it —
+    // both Inbox and All leads read the same cache, so it's gone from both at
+    // once. The server write happens in the background (no round-trip lag).
+    const saved = deleteLead(b.dataset.del);
+    paintPage(view);
     ctx.toast('Lead deleted');
     ctx.refreshInboxCount?.();
-    if (wasSelected) selectedId = null;
-    view === 'inbox' ? renderInbox() : renderLeads();
+    await saved;
   }));
 }
 

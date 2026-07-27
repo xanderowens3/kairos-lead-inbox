@@ -54,7 +54,7 @@ function scheduledCardHTML(sc){
 }
 
 /* compact schedule status attached beneath a created ICP's row (merged unit) */
-function scheduleStripHTML(sc){
+export function scheduleStripHTML(sc){
   const label = FREQ_LABEL[sc.frequency] || 'every day';
   const state = sc.warming ? 'warming' : 'active';
   const stateLabel = sc.warming ? 'Warming up' : 'Scheduled';
