@@ -87,11 +87,10 @@ let ctx = null;          // injected from builder.js: { go, toast, searches, loa
    spends real money (Claude tokens per post + the Trigify collection already
    paid). Small batches while testing. */
 async function runAnalysis(o, id){
-  const CAP = 10;
   const ok = await confirmDialog({
-    title: `Analyze up to ${CAP} new posts?`,
-    body: `Each post is scored by Claude for <b>${esc(o.name)}</b>. Only posts not analyzed `
-      + `before are sent, so this never double-spends. Small batch for testing — roughly a cent or two.`,
+    title: 'Analyze all new posts?',
+    body: `Every post collected for <b>${esc(o.name)}</b> that hasn't been scored yet is sent to `
+      + `Claude. Posts already analyzed are skipped, so this never double-spends.`,
     confirm: 'Run analysis'
   });
   if (!ok) return;
@@ -100,7 +99,7 @@ async function runAnalysis(o, id){
   if (btn){ btn.disabled = true; btn.classList.add('spinning'); btn.innerHTML =
     `<svg viewBox="0 0 24 24" class="an-ic"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg> Analyzing…`; }
 
-  const r = await analyzeOffer(id, CAP);
+  const r = await analyzeOffer(id);        // no cap — score everything collected
 
   if (btn){ btn.disabled = false; btn.classList.remove('spinning'); btn.innerHTML =
     `<svg viewBox="0 0 24 24" class="an-ic"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg> Analyze new posts`; }

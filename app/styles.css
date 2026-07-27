@@ -663,6 +663,17 @@ textarea::placeholder{color:var(--faint)}
   font-variant-numeric:tabular-nums}
 .thr-tip{display:block;margin-top:5px;color:var(--blue-deep);font-weight:600}
 
+/* right-hand drawer: the lead detail opened from an ICP's Results list */
+.drawer-wrap{position:fixed;inset:0;z-index:90;opacity:0;transition:opacity .16s;pointer-events:none}
+.drawer-wrap.open{opacity:1;pointer-events:auto}
+.drawer-bd{position:absolute;inset:0;background:rgba(20,28,44,.28);backdrop-filter:blur(2px)}
+.drawer-panel{position:absolute;top:0;right:0;height:100%;width:min(460px,92vw);
+  background:var(--surface);border-left:1px solid var(--line);box-shadow:-14px 0 44px rgba(20,28,44,.18);
+  overflow-y:auto;transform:translateX(14px);transition:transform .18s;display:block}
+.drawer-wrap.open .drawer-panel{transform:none}
+.fbb.gold{flex:0 0 auto;min-width:44px;color:#C08A00}
+.fbb.gold.on{background:#FDF4DE;border-color:#E7C766;color:#C08A00}
+
 /* scoring shown inside the Results list */
 .res-score{flex-shrink:0;min-width:30px;height:26px;border-radius:7px;display:inline-flex;
   align-items:center;justify-content:center;padding:0 7px;font-family:var(--serif);font-size:14px;

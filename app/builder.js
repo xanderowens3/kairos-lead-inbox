@@ -7,9 +7,8 @@ import { loadOffers, offers, offerById, attachSearch, detachSearch,
          thresholdFor, setThreshold, offerForSearch, DEFAULT_MIN_SCORE } from './offers.js';
 import { addSchedule, loadSchedules, allSchedules, cancelSchedule } from './schedules.js';
 import { initOffers, renderOffers, renderOffer, scheduleStripHTML } from './views-offers.js';
-import { initLeads, renderInbox, renderLeads } from './views-leads.js';
-import { loadLeads, countInbox, leadsForIcp, isRecommended,
-         promoteLead, pinGolden, rateLead, leadById, analyzeOffer } from './leads.js';
+import { initLeads, renderInbox, renderLeads, openLeadDrawer } from './views-leads.js';
+import { loadLeads, countInbox, leadsForIcp, isRecommended, leadById, analyzeOffer } from './leads.js';
 import { confirmDialog } from './modal.js';
 
 const $  = s => document.querySelector(s);
@@ -606,26 +605,10 @@ export function bindRows(refreshView){
       refresh();
     });
   });
-  $$('[data-promote]').forEach(b => b.addEventListener('click', async e => {
+  // a scored post opens the same detail view the inbox uses, as a right drawer
+  $$('[data-scored]').forEach(c => c.addEventListener('click', e => {
     e.stopPropagation();
-    const l = leadById(b.dataset.promote);
-    await promoteLead(b.dataset.promote, !l?.promoted);
-    toast(l?.promoted ? 'Removed from inbox' : 'Promoted to inbox');
-    syncInboxCount(); refresh();
-  }));
-  $$('[data-rate][data-rlead]').forEach(b => b.addEventListener('click', async e => {
-    e.stopPropagation();
-    const l = leadById(b.dataset.rlead);
-    const next = l?.rating === b.dataset.rate ? null : b.dataset.rate;
-    await rateLead(b.dataset.rlead, next, l?.ratingNote, l?.userScore);
-    refresh();
-  }));
-  $$('[data-gold]').forEach(b => b.addEventListener('click', async e => {
-    e.stopPropagation();
-    const l = leadById(b.dataset.gold);
-    await pinGolden(b.dataset.gold, !l?.golden);
-    toast(l?.golden ? 'Unpinned' : 'Pinned as a permanent example');
-    refresh();
+    openLeadDrawer(c.dataset.scored, () => { syncInboxCount(); refresh(); });
   }));
 }
 
@@ -677,9 +660,31 @@ function resultsHTML(rows, query, icpId){
     ${head}
     <div class="res-h">${rows.length} collected &middot; ${people} from people, ${rows.length-people} from company pages
       ${scored.length ? `&middot; <b>${scored.length}</b> scored` : ''}</div>
-    ${scored.map(r => cardHTML(r, undefined, byPost[r.id], thr)).join('')}
+    <div class="leads-list">
+      ${scored.map(r => scoredCardHTML(byPost[r.id], thr)).join('')}
+    </div>
     ${unscored.length && scored.length ? `<div class="res-div">Not scored yet</div>` : ''}
     ${unscored.map(r => cardHTML(r)).join('')}
+  </div>`;
+}
+
+/* A scored post renders exactly like a lead in the Inbox — click it to open the
+   detail drawer with the agent's reasoning and the score control. */
+function scoredCardHTML(l, thr){
+  const rec = isRecommended(l);
+  const bits = [l.jobTitle, l.company, l.industry, l.location].filter(Boolean).join(' · ');
+  return `<div class="lead-card" data-scored="${l.id}">
+    <div class="lc-score">${l.score}</div>
+    <div class="lc-body">
+      <div class="lc-head">
+        <span class="lc-name">${esc(l.author || 'Unknown')}</span>
+        <span class="rev-status">${rec ? 'in inbox' : 'below line'}</span>
+        <span class="lc-date">${l.analyzedAt ? new Date(l.analyzedAt).toLocaleDateString('en-US',
+          { month:'short', day:'numeric', year:'numeric' }) : ''}</span>
+      </div>
+      ${bits ? `<div class="lc-profile">${esc(bits)}</div>` : ''}
+      <div class="lc-reason">${esc(l.reason || '')}</div>
+    </div>
   </div>`;
 }
 
@@ -695,29 +700,18 @@ function cardHTML(r, isFull, lead, thr){
     : isFull ? `<span class="mtag full">✓ all keywords</span>`
              : `<span class="mtag part">partial</span>`;
 
-  const rec = lead ? isRecommended(lead) : false;
-  return `<div class="res-c${isFull === false ? ' partial' : ''}${lead ? (rec?' scored in':' scored out') : ''}">
+  return `<div class="res-c${isFull === false ? ' partial' : ''}">
     <div class="res-top">
-      ${lead ? `<span class="res-score ${rec?'in':''}">${lead.score}</span>` : ''}
       <span class="who">${esc(r.author?.name || 'Unknown')}</span>
       <span class="badge ${person?'p':'c'}">${person?'Person':'Company page'}</span>
       ${mtag}
-      ${lead ? `<span class="rev-status">${rec ? (lead.promoted && lead.score < thr ? 'promoted in' : 'in inbox') : 'below line'}</span>` : ''}
       <span class="when">${esc(when)}</span></div>
-    ${lead?.reason ? `<div class="res-reason">${esc(lead.reason)}</div>` : ''}
     <div class="res-body${open?' open':''}">${esc(shown)}${!open && text.length>240?'…':''}</div>
     ${text.length > 240 ? `<button class="more" data-exp="${r.id}">${open?'Show less':'Show full post'}</button>` : ''}
     <div class="res-f">
       <a href="${esc(r.content?.url||'#')}" target="_blank" rel="noopener" class="lk">Open post &#8599;</a>
       ${r.author?.profile_url?`<a href="${esc(r.author.profile_url)}" target="_blank" rel="noopener" class="lk">Profile &#8599;</a>`:''}
       <span class="mut">${e.likes ?? 0} likes &middot; ${e.comments ?? 0} comments</span>
-      ${lead ? `<span class="res-acts">
-        ${lead.score < thr || lead.promoted
-          ? `<button class="rev-btn ${lead.promoted?'on':''}" data-promote="${lead.id}">${lead.promoted?'Promoted':'Promote'}</button>` : ''}
-        <button class="rev-ic good ${lead.rating==='good'?'on':''}" data-rate="good" data-rlead="${lead.id}" title="Good fit">✓</button>
-        <button class="rev-ic bad ${lead.rating==='bad'?'on':''}" data-rate="bad" data-rlead="${lead.id}" title="Not a fit">✕</button>
-        <button class="rev-ic gold ${lead.golden?'on':''}" data-gold="${lead.id}" title="Pin as a permanent example">★</button>
-      </span>` : ''}
     </div>
   </div>`;
 }

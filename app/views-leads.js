@@ -2,8 +2,9 @@
    Inbox + Leads: a scrollable list on the left. Clicking a lead opens a
    detail panel on the right (closed until a lead is clicked).
    ========================================================================== */
-import { loadLeads, recommended, inbox, leadById, rateLead, markContacted, deleteLead } from './leads.js';
-import { loadOffers } from './offers.js';
+import { loadLeads, recommended, inbox, leadById, rateLead, markContacted, deleteLead,
+         pinGolden, isRecommended } from './leads.js';
+import { loadOffers, thresholdFor } from './offers.js';
 import { confirmDialog } from './modal.js';
 
 const $  = s => document.querySelector(s);
@@ -183,7 +184,9 @@ function closePanel(){
 }
 
 /* ══════════════ PANEL ══════════════ */
-function panelHTML(l){
+/* verdicts: show the good/not-a-fit/pin controls. They belong to the leads
+   views; in an ICP's Results list the score alone decides what reaches the inbox. */
+function panelHTML(l, { verdicts = true } = {}){
   if (!l) return '';
   let quote = esc(l.text || '');
   if (l.evidence){
@@ -240,45 +243,31 @@ function panelHTML(l){
       </div>` : ''}
 
       <div class="panel-sec fb-sec">
-        <h4>Rate this lead</h4>
-        <p class="fb-mini">Tell the agent what you think — it calibrates future scoring to your taste.</p>
-        <div class="fb-btns">
+        <h4>${verdicts ? 'Rate this lead' : 'Score this post'}</h4>
+        <p class="fb-mini">${verdicts
+          ? 'Tell the agent what you think — it calibrates future scoring to your taste.'
+          : `Your score replaces the agent's. Anything at <b>${thresholdFor(l.icpId)}</b> or above
+             moves this into your inbox.`}</p>
+        ${verdicts ? `<div class="fb-btns">
           <button class="fbb good ${l.rating==='good'?'on':''}" data-fb="good">Good fit</button>
           <button class="fbb bad ${l.rating==='bad'?'on':''}" data-fb="bad">Not a fit</button>
-        </div>
+          <button class="fbb gold ${l.golden?'on':''}" data-gold="1" title="Pin as a permanent example">★</button>
+        </div>` : ''}
         <label class="fb-label" for="fb-score">What should this score? <span>0&ndash;100</span></label>
         <input type="number" id="fb-score" class="fb-score" min="0" max="100" placeholder="e.g. 75"
           value="${l.userScore ?? ''}">
         <input type="text" id="fb-note" class="fb-note" placeholder="Optional: one line on why"
           value="${esc(l.ratingNote || '')}">
-        <button class="btn btn-p w" id="fb-submit">Submit to agent</button>
+        <button class="btn btn-p w" id="fb-submit">${verdicts ? 'Submit to agent' : 'Save score'}</button>
       </div>
     </div>`;
 }
 
 function bindPanel(){
   $('#panelClose')?.addEventListener('click', closePanel);
-
-  // good/bad are a mutually-exclusive selection — submit sends it
-  $$('#leadPanel [data-fb]').forEach(b => b.addEventListener('click', () => {
-    const wasOn = b.classList.contains('on');
-    $$('#leadPanel [data-fb]').forEach(x => x.classList.remove('on'));
-    if (!wasOn) b.classList.add('on');
-  }));
-
-  $('#fb-submit')?.addEventListener('click', async () => {
-    const rating = $('#leadPanel [data-fb].on')?.dataset.fb || null;
-    const scoreRaw = $('#fb-score')?.value.trim();
-    const userScore = scoreRaw === '' ? null : Math.max(0, Math.min(100, Math.round(+scoreRaw)));
-    const note = $('#fb-note')?.value.trim() || '';
-    if (!rating && userScore == null){ ctx.toast('Pick good/not-a-fit or enter a score first', true); return; }
-
-    await rateLead(selectedId, rating, note, userScore);
-    ctx.toast('Sent to the agent — it will weight this next run');
-
+  bindFeedback($('#leadPanel'), () => selectedId, { verdicts: true }, l => {
     // reflect the verdict badge + updated score on the card without a full re-render
-    const l = leadById(selectedId);
-    const card = document.querySelector(`.lead-card[data-lead="${selectedId}"]`);
+    const card = document.querySelector(`.lead-card[data-lead="${l.id}"]`);
     if (card){
       const scoreEl = card.querySelector('.lc-score');
       if (scoreEl) scoreEl.textContent = l.score;
@@ -292,7 +281,67 @@ function bindPanel(){
       }
     }
     const panel = $('#leadPanel');
-    if (panel){ panel.innerHTML = panelHTML(l); bindPanel(); }
-    ctx.refreshInboxCount?.();
+    if (panel){ panel.innerHTML = panelHTML(l, { verdicts: true }); bindPanel(); }
   });
+}
+
+/* Shared feedback wiring for both the inline panel and the Results drawer. */
+function bindFeedback(root, getId, opts, after){
+  if (!root) return;
+  const q = sel => root.querySelector(sel);
+  root.querySelectorAll('[data-fb]').forEach(b => b.addEventListener('click', () => {
+    const wasOn = b.classList.contains('on');
+    root.querySelectorAll('[data-fb]').forEach(x => x.classList.remove('on'));
+    if (!wasOn) b.classList.add('on');
+  }));
+  q('[data-gold]')?.addEventListener('click', async e => {
+    const btn = e.currentTarget, on = !btn.classList.contains('on');
+    btn.classList.toggle('on', on);
+    await pinGolden(getId(), on);
+    ctx.toast(on ? 'Pinned as a permanent example' : 'Unpinned');
+  });
+  q('#fb-submit')?.addEventListener('click', async () => {
+    const id = getId();
+    const rating = q('[data-fb].on')?.dataset.fb || null;
+    const scoreRaw = q('#fb-score')?.value.trim();
+    const userScore = scoreRaw === '' ? null : Math.max(0, Math.min(100, Math.round(+scoreRaw)));
+    const note = q('#fb-note')?.value.trim() || '';
+    if (!rating && userScore == null){
+      ctx.toast(opts.verdicts ? 'Pick good/not-a-fit or enter a score first' : 'Enter a score first', true);
+      return;
+    }
+    await rateLead(id, rating, note, userScore);
+    const l = leadById(id);
+    ctx.toast(userScore != null && isRecommended(l)
+      ? `Scored ${l.score} — moved to your inbox`
+      : 'Saved — the agent will weight this next run');
+    ctx.syncInboxCount?.();
+    after?.(l);
+  });
+}
+
+/* Open a lead's detail as a right-hand drawer, from anywhere (used by the ICP
+   Results list, which has no inline panel of its own). */
+export function openLeadDrawer(id, onChange){
+  const l = leadById(id);
+  if (!l) return;
+  let wrap = document.getElementById('leadDrawer');
+  if (!wrap){
+    wrap = document.createElement('div');
+    wrap.id = 'leadDrawer';
+    document.body.appendChild(wrap);
+  }
+  const paint = lead => {
+    wrap.className = 'drawer-wrap open';
+    wrap.innerHTML = `<div class="drawer-bd"></div>
+      <aside class="leads-panel drawer-panel">${panelHTML(lead, { verdicts: false })}</aside>`;
+    wrap.querySelector('.drawer-bd').addEventListener('click', closeLeadDrawer);
+    wrap.querySelector('#panelClose')?.addEventListener('click', closeLeadDrawer);
+    bindFeedback(wrap, () => id, { verdicts: false }, updated => { paint(updated); onChange?.(updated); });
+  };
+  paint(l);
+}
+export function closeLeadDrawer(){
+  const wrap = document.getElementById('leadDrawer');
+  if (wrap){ wrap.classList.remove('open'); setTimeout(() => wrap.remove(), 160); }
 }
