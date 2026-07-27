@@ -28,7 +28,7 @@ const todayISO = () => isoDate(new Date());
 /* default first run: the next whole hour from now (always in the future) */
 function defaultSched(){
   const d = new Date(Date.now() + 3600e3); d.setMinutes(0, 0, 0);
-  return { mode: 'now', date: isoDate(d), time: `${pad2(d.getHours())}:00` };
+  return { date: isoDate(d), time: `${pad2(d.getHours())}:00` };
 }
 const FREQ_LABEL = { 'hourly':'every hour', 'every-12h':'every 12 hours', 'daily':'every day',
   'weekly':'every week', 'monthly':'every month', 'quarterly':'every 3 months' };
@@ -181,13 +181,7 @@ function renderBuild(){
       ${off ? `<section class="sec">
         <div class="sec-h"><span class="sec-n">6</span><h2>When to <em>run</em></h2></div>
         <div class="sec-b">
-          <div class="runmodes">
-            <button type="button" class="runmode ${sched.mode==='now'?'on':''}" data-mode="now">
-              <b>Run now</b><span>Start collecting immediately</span></button>
-            <button type="button" class="runmode ${sched.mode==='daily'?'on':''}" data-mode="daily">
-              <b>Schedule</b><span>Pick the date &amp; time of the first run</span></button>
-          </div>
-          <div class="sched-when" style="display:${sched.mode==='daily'?'block':'none'}">
+          <div class="sched-when">
             <div class="grid2">
               <div class="field"><label>Start date</label>
                 <input type="date" id="f_rundate" value="${sched.date}" min="${todayISO()}"></div>
@@ -307,13 +301,6 @@ function bind(){
   on('f_freq','frequency'); on('f_time','time_frame'); on('f_ctype','content_type');
   on('f_sort','linkedin_sort_by'); on('f_max','max_results');
 
-  $$('.runmode').forEach(b => b.addEventListener('click', () => {
-    sched.mode = b.dataset.mode;
-    $$('.runmode').forEach(x => x.classList.toggle('on', x === b));
-    const when = document.querySelector('.sched-when');
-    if (when) when.style.display = sched.mode === 'daily' ? 'block' : 'none';
-    updateSchedSummary();
-  }));
   $('#f_minscore')?.addEventListener('input', e => { minScore = Number(e.target.value); paintMinScore(); });
   paintMinScore();
   $('#f_rundate')?.addEventListener('input', e => { sched.date = e.target.value; syncTimeMin(); updateSchedSummary(); });
@@ -402,7 +389,7 @@ function paint(){
   if (note) note.innerHTML = capN
     ? `1 credit to create, plus 1 for every result collected — up to <b>${capN+1} credits</b>.`
     : `1 credit to create, plus 1 for every result collected. Set a maximum to cap it.`;
-  const scheduling = sched.mode === 'daily' && currentOffer;
+  const scheduling = !!currentOffer;                 // ICPs in an offer are always scheduled
   const canSubmit = ready && (!scheduling || schedValid);
   const btn = $('#create');
   if (btn){ btn.disabled = !canSubmit;
@@ -411,7 +398,7 @@ function paint(){
 }
 
 async function create(){
-  if (sched.mode === 'daily' && currentOffer) return scheduleIcp();
+  if (currentOffer) return scheduleIcp();     // inside an offer, creation is always scheduled
   const btn = $('#create');
   btn.disabled = true; btn.textContent = 'Creating…';
   lastError = null;

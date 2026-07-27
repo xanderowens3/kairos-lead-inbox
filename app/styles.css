@@ -598,14 +598,6 @@ textarea::placeholder{color:var(--faint)}
   font-size:9px;letter-spacing:.06em;padding:2px 7px}
 
 /* ─────────── ICP RUN SCHEDULING ─────────── */
-.runmodes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
-.runmode{display:flex;flex-direction:column;gap:3px;text-align:left;padding:14px 16px;
-  border:1.5px solid var(--line);border-radius:11px;background:var(--surface);cursor:pointer;
-  transition:.14s}
-.runmode:hover{border-color:#AEC2E4}
-.runmode.on{border-color:var(--blue);background:var(--blue-tint);box-shadow:0 0 0 3px var(--blue-glow)}
-.runmode b{font-size:14px;color:var(--ink);font-weight:700}
-.runmode span{font-size:11.5px;color:var(--muted);line-height:1.35}
 .sched-when .grid2 .field{margin-bottom:0}
 .sched-summary{font-size:13px;color:var(--ink);line-height:1.55;margin-top:16px;
   padding:12px 14px;background:var(--blue-tint);border:1px solid #C6D9F8;border-radius:10px}
