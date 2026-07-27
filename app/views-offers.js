@@ -4,7 +4,6 @@
 import { blankOffer, loadOffers, offers, offerById, upsertOffer, removeOffer,
          detachSearch, readiness } from './offers.js';
 import { TYPES } from './schema.js';
-import { analyzeOffer } from './leads.js';
 import { confirmDialog } from './modal.js';
 import { loadSchedules, schedulesForOffer, cancelSchedule } from './schedules.js';
 
@@ -53,22 +52,36 @@ function scheduledCardHTML(sc){
   </div>`;
 }
 
-/* compact schedule status attached beneath a created ICP's row (merged unit) */
+/* Is this schedule mid-run? Used to keep the view polling until it settles. */
+export const isRunning = sc => sc.runState === 'collecting' || sc.runState === 'analyzing';
+
+/* compact schedule status attached beneath a created ICP's row (merged unit).
+   An ICP only reads as finished ("Ready") once the agent has scored everything. */
 export function scheduleStripHTML(sc){
   const label = FREQ_LABEL[sc.frequency] || 'every day';
-  const state = sc.warming ? 'warming' : 'active';
-  const stateLabel = sc.warming ? 'Warming up' : 'Scheduled';
-  let outcome = '';
-  if (sc.lastRunAt){
-    outcome = sc.lastError
-      ? `<span class="strip-sep">·</span><span class="sched-err">last run ${fmtWhen(sc.lastRunAt)}: ${esc(sc.lastError)}</span>`
-      : `<span class="strip-sep">·</span>last run ${fmtWhen(sc.lastRunAt)}: <b>${sc.lastAnalyzed ?? 0}</b> analyzed, <b>${sc.lastRecommended ?? 0}</b> recommended`;
-  }
+  const running = isRunning(sc);
+  const state = sc.runState === 'collecting' ? 'warming'
+              : sc.runState === 'analyzing' ? 'analyzing'
+              : sc.runState === 'error' ? 'err' : 'active';
+  const stateLabel = { warming:'Collecting', analyzing:'Analyzing', err:'Needs attention', active:'Ready' }[state];
+
+  const p = sc.progress;
+  const body = running
+    ? (sc.runState === 'collecting'
+        ? `Collecting posts from Trigify — scoring starts as soon as they land.`
+        : `Scoring ${p?.total ? `<b>${p.done ?? 0}</b> of <b>${p.total}</b>` : 'posts'} — leads appear once all are done.`)
+    : `Runs <b>${label}</b> <span class="strip-sep">·</span> next <b>${fmtWhen(sc.nextRun)}</b>` + (
+        sc.lastRunAt
+          ? (sc.lastError
+              ? `<span class="strip-sep">·</span><span class="sched-err">last run ${fmtWhen(sc.lastRunAt)}: ${esc(sc.lastError)}</span>`
+              : `<span class="strip-sep">·</span>last run ${fmtWhen(sc.lastRunAt)}: <b>${sc.lastAnalyzed ?? 0}</b> scored, <b>${sc.lastRecommended ?? 0}</b> to inbox`)
+          : '');
+
   return `<div class="sched-strip ${state}">
-    ${clockSvg}
+    ${running ? `<span class="strip-spin"></span>` : clockSvg}
     <div class="strip-txt">
       <span class="sched-pill ${state}">${stateLabel}</span>
-      Runs <b>${label}</b> <span class="strip-sep">·</span> next <b>${fmtWhen(sc.nextRun)}</b>${sc.warming?' <span class="strip-sep">·</span> waiting for first results':''}${outcome}
+      ${body}
     </div>
     <button class="sched-cancel sm" data-cancel="${sc.id}">Stop</button>
   </div>`;
@@ -82,42 +95,6 @@ const pretty = v => cap(String(v).replace(/[-_]/g,' '));
 
 let draft = null;
 let ctx = null;          // injected from builder.js: { go, toast, searches, loadSearches, del, toggle, pull, resultsHTML }
-
-/* Analyze an offer's new posts. Caps the batch and confirms first, because it
-   spends real money (Claude tokens per post + the Trigify collection already
-   paid). Small batches while testing. */
-async function runAnalysis(o, id){
-  const ok = await confirmDialog({
-    title: 'Analyze all new posts?',
-    body: `Every post collected for <b>${esc(o.name)}</b> that hasn't been scored yet is sent to `
-      + `Claude. Posts already analyzed are skipped, so this never double-spends.`,
-    confirm: 'Run analysis'
-  });
-  if (!ok) return;
-
-  const btn = $('#analyze'), msg = $('#analyzeMsg');
-  if (btn){ btn.disabled = true; btn.classList.add('spinning'); btn.innerHTML =
-    `<svg viewBox="0 0 24 24" class="an-ic"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg> Analyzing…`; }
-
-  const r = await analyzeOffer(id);        // no cap — score everything collected
-
-  if (btn){ btn.disabled = false; btn.classList.remove('spinning'); btn.innerHTML =
-    `<svg viewBox="0 0 24 24" class="an-ic"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg> Analyze new posts`; }
-
-  if (r.error){
-    if (msg) msg.innerHTML = `<div class="none-box warnbox">Analysis failed: ${esc(r.error)}</div>`;
-    return;
-  }
-  ctx.refreshInboxCount?.();
-  if (msg) msg.innerHTML = `<div class="an-result">
-    Analyzed <b>${r.analyzed}</b> post${r.analyzed===1?'':'s'} &middot;
-    <b>${r.recommended}</b> recommended${r.cost!=null?` &middot; ~$${r.cost.toFixed(3)}`:''}
-    ${r.remaining ? ` &middot; ${r.remaining} more not yet analyzed` : ''}
-    ${r.recommended ? `<button class="linkbtn" id="goInbox">View in inbox &rarr;</button>` : ''}
-  </div>`;
-  $('#goInbox')?.addEventListener('click', () => ctx.go('inbox'));
-  ctx.toast(r.recommended ? `${r.recommended} lead${r.recommended===1?'':'s'} added` : 'No leads this batch');
-}
 
 export function initOffers(c){ ctx = c; }
 
@@ -241,13 +218,10 @@ export async function renderOffer(id){
       <div class="icp-head icp-head-row">
         <div>
           <h2>ICPs</h2>
-          <p>Each one is a listening search. Everything it collects gets judged against the context above.</p>
+          <p>Each one is a listening search. At its scheduled time it collects posts, the agent
+             scores every one of them, and anything clearing the ICP's threshold lands in your inbox.</p>
         </div>
-        ${mine.length ? `<button class="btn btn-p sm analyze-btn" id="analyze">
-          <svg viewBox="0 0 24 24" class="an-ic"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
-          Analyze new posts</button>` : ''}
       </div>
-      <div id="analyzeMsg"></div>
 
       <button class="add-icp" id="newIcp">
         <span class="add-icp-plus">+</span>
@@ -269,7 +243,6 @@ export async function renderOffer(id){
   $('#back').addEventListener('click', renderOffers);
   $('#edit').addEventListener('click', () => { draft = structuredClone(o); renderEditor(); });
   $('#newIcp').addEventListener('click', () => ctx.go('build', o.id));
-  $('#analyze')?.addEventListener('click', () => runAnalysis(o, id));
   $$('[data-cancel]').forEach(b => b.addEventListener('click', async () => {
     const sc = mySchedules.find(s => s.id === b.dataset.cancel);
     const created = !!sc?.searchId;
@@ -300,7 +273,16 @@ export async function renderOffer(id){
     await removeOffer(id); ctx.toast('Offer deleted'); renderOffers();
   });
   ctx.bindRows(() => renderOffer(id));
+
+  // while a run is in flight, keep the view live so it settles on its own
+  clearTimeout(runPoll);
+  if (mySchedules.some(isRunning)){
+    runPoll = setTimeout(() => {
+      if ($('#main')?.dataset.view === 'offer') renderOffer(id);
+    }, 8000);
+  }
 }
+let runPoll = null;
 
 /* ══════════════ EDITOR ══════════════ */
 export function renderEditor(){

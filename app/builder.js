@@ -8,7 +8,7 @@ import { loadOffers, offers, offerById, attachSearch, detachSearch,
 import { addSchedule, loadSchedules, allSchedules, cancelSchedule } from './schedules.js';
 import { initOffers, renderOffers, renderOffer, scheduleStripHTML } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads, openLeadDrawer } from './views-leads.js';
-import { loadLeads, countInbox, leadsForIcp, isRecommended, leadById, analyzeOffer } from './leads.js';
+import { loadLeads, countInbox, leadsForIcp, isRecommended, leadById } from './leads.js';
 import { confirmDialog } from './modal.js';
 
 const $  = s => document.querySelector(s);
@@ -581,19 +581,6 @@ export function bindRows(refreshView){
     expanded[x.dataset.exp] = !expanded[x.dataset.exp]; refresh();
   }));
 
-  // score every collected post that hasn't been judged yet
-  $$('[data-analyze]').forEach(b => b.addEventListener('click', async e => {
-    e.stopPropagation();
-    const label = b.textContent;
-    b.disabled = true; b.textContent = 'Analyzing…';
-    const r = await analyzeOffer(b.dataset.analyze);
-    b.disabled = false; b.textContent = label;
-    if (r.error) return toast(r.error, true);
-    toast(`${r.analyzed} analyzed · ${r.recommended} to inbox`
-      + (r.failedPosts ? ` · ${r.failedPosts} post(s) failed` : ''));
-    await loadLeads(); syncInboxCount(); refresh();
-  }));
-
   // ranking actions on scored posts
   $$('[data-thr]').forEach(sl => {
     sl.addEventListener('input', () => {
@@ -650,8 +637,8 @@ function resultsHTML(rows, query, icpId){
       <input type="range" min="0" max="100" step="5" value="${thr}" class="rev-slider" data-thr="${icpId}">
     </div>
     ${unscored.length ? `<div class="res-note analyze-note">
-      <b>${unscored.length}</b> post${unscored.length===1?'':'s'} not scored yet.
-      <button class="btn btn-p sm" data-analyze="${off.id}">Analyze ${unscored.length} now</button></div>` : ''}` : '';
+      <b>${unscored.length}</b> post${unscored.length===1?'':'s'} waiting to be scored — the agent
+      picks them up on this ICP's next run.</div>` : ''}` : '';
 
   if (!rows.length) return `<div class="res">${head}<div class="res-empty">Nothing collected yet.</div></div>`;
 

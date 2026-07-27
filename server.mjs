@@ -150,8 +150,11 @@ function pruneOldLeads(leadsStore, offer){
   return kept;
 }
 
-/* ---------- analysis: score an offer's new posts ---------- */
-async function analyzeOffer(offerId, maxPosts){
+/* ---------- analysis: score an offer's new posts ----------
+   Nothing is written until every post has been scored: leads are collected in
+   memory and saved in one go at the end, so a lead never appears in the inbox
+   from a half-finished run. onProgress reports (done, total) for the UI. */
+async function analyzeOffer(offerId, maxPosts, onProgress){
   if (!anthropic) return { error: 'ANTHROPIC_API_KEY not set on the server' };
   const offers = await getOffers();
   const offer = offers.find(o => o.id === offerId);
@@ -180,6 +183,7 @@ async function analyzeOffer(offerId, maxPosts){
   const feedback = buildFeedback(leadsStore, offerId);
 
   let inTok = 0, outTok = 0, cacheRead = 0, recommended = 0, enriched = 0, failedPosts = 0;
+  let scoredCount = 0;
   const now = new Date().toISOString();
   const creditsBefore = (await tg('/usage'))?.data?.credits?.total_consumed ?? 0;
 
@@ -225,10 +229,12 @@ async function analyzeOffer(offerId, maxPosts){
       promoted: false, golden: false
     });
     if (recommend) recommended++;
+    onProgress?.(++scoredCount, toScore.length);
   };
 
   // Warm the prompt cache on the first post alone — otherwise the initial
   // concurrent calls would all miss and each pay to write the same cache entry.
+  onProgress?.(0, toScore.length);
   await scoreOne(toScore[0]);
   const rest = toScore.slice(1);
   let next = 0;
@@ -290,6 +296,12 @@ async function waitForResults(searchId, tries = 9, delayMs = 10000){
 }
 
 async function runDueSchedule(sch, schedules){
+  const mark = async (state, extra) => {          // publish run state for the UI
+    sch.runState = state;
+    Object.assign(sch, extra || {});
+    await saveSchedules(schedules);
+  };
+
   // first run: create the Trigify search, attach it, and let it collect
   if (!sch.searchId){
     const id = await createSearch(sch.payload);
@@ -309,31 +321,42 @@ async function runDueSchedule(sch, schedules){
       await saveOffers(offers);
     }
     console.log(`  scheduler: created ICP "${sch.name}" → ${id}, waiting for first results…`);
+    await mark('collecting');
     await waitForResults(id);
   }
   sch.lastRunAt = new Date().toISOString();
 
   if (!anthropic){
-    sch.lastError = 'Analysis skipped — ANTHROPIC_API_KEY not set on the server';
     sch.lastAnalyzed = 0; sch.lastRecommended = 0;
+    await mark('error', { lastError: 'Analysis skipped — ANTHROPIC_API_KEY not set on the server' });
     console.log(`  scheduler: ANALYSIS SKIPPED for "${sch.name}" — ANTHROPIC_API_KEY not set on the server`);
     return { analyzed: 0, skipped: true };
   }
   try {
-    const r = await analyzeOffer(sch.offerId, 0);
+    await mark('analyzing', { progress: null });
+    // throttle progress writes — one every 5 posts is enough for the UI
+    let lastWrite = 0;
+    const r = await analyzeOffer(sch.offerId, 0, (done, total) => {
+      sch.progress = { done, total };
+      if (done === 0 || done === total || done - lastWrite >= 5){
+        lastWrite = done;
+        saveSchedules(schedules).catch(() => {});
+      }
+    });
     if (r.error){                                   // e.g. offer has no ICPs
-      sch.lastError = r.error; sch.lastAnalyzed = 0; sch.lastRecommended = 0;
+      sch.lastAnalyzed = 0; sch.lastRecommended = 0;
+      await mark('error', { lastError: r.error, progress: null });
       console.log(`  scheduler: analysis error for "${sch.name}": ${r.error}`);
       return { analyzed: 0, failed: true };
     }
-    sch.lastError = null;
     sch.lastAnalyzed = r.analyzed ?? 0;
     sch.lastRecommended = r.recommended ?? 0;
+    await mark('ready', { lastError: null, progress: null });
     console.log(`  scheduler: analyzed "${sch.name}" → ${r.analyzed ?? 0} posts, ${r.recommended ?? 0} recommended`);
     return { analyzed: r.analyzed ?? 0, skipped: false };
   } catch (e) {
-    sch.lastError = e.message;
     sch.lastAnalyzed = 0; sch.lastRecommended = 0;
+    await mark('error', { lastError: e.message, progress: null });
     console.log(`  scheduler: analysis failed for "${sch.name}": ${e.message}`);
     return { analyzed: 0, skipped: false, failed: true };
   }

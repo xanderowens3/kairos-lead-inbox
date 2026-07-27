@@ -637,6 +637,13 @@ textarea::placeholder{color:var(--faint)}
   background:var(--blue-tint);border:1px solid #C6D9F8;border-radius:0 0 14px 14px;
   font-size:12px;color:var(--muted);line-height:1.4}
 .sched-strip.warming{background:#FFF7ED;border-color:#F3D9AE}
+.sched-strip.analyzing{background:#F1ECFD;border-color:#D6C9F5}
+.sched-strip.err{background:var(--red-bg);border-color:#F0CBC7}
+.sched-pill.analyzing{background:#E6DCFB;color:#5B3FA8}
+.sched-pill.err{background:#F8D8D4;color:var(--red)}
+.strip-spin{flex-shrink:0;width:18px;height:18px;border-radius:50%;
+  border:2.5px solid #D6C9F5;border-top-color:#6B4BC8;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .sched-strip .sched-ic{width:20px;height:20px}
 .sched-strip .strip-txt{flex:1;min-width:0}
 .sched-strip b{color:var(--ink);font-weight:600}
