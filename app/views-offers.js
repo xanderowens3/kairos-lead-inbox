@@ -25,16 +25,31 @@ const FREQ_LABEL = { 'hourly':'every hour', 'every-12h':'every 12 hours', 'daily
 
 function scheduledCardHTML(sc){
   const label = FREQ_LABEL[sc.frequency] || 'every day';
-  return `<div class="sched-card">
+  const created = !!sc.searchId;
+  const state = !created ? 'scheduled' : (sc.warming ? 'warming' : 'active');
+  const stateLabel = { scheduled:'Scheduled', warming:'Warming up', active:'Active' }[state];
+
+  const sub = !created
+    ? `First run <b>${fmtWhen(sc.nextRun)}</b>, then <b>${label}</b>. Not collecting yet.`
+    : `Runs <b>${label}</b> · next run <b>${fmtWhen(sc.nextRun)}</b>${sc.warming ? ' · waiting for first results' : ''}`;
+
+  let outcome = '';
+  if (sc.lastRunAt){
+    outcome = sc.lastError
+      ? `<div class="sched-err">Last run ${fmtWhen(sc.lastRunAt)} — ${esc(sc.lastError)}</div>`
+      : `<div class="sched-out">Last run ${fmtWhen(sc.lastRunAt)} — <b>${sc.lastAnalyzed ?? 0}</b> analyzed, <b>${sc.lastRecommended ?? 0}</b> recommended</div>`;
+  }
+
+  return `<div class="sched-card ${state}">
     <div class="sched-l">
       ${clockSvg}
       <div>
-        <div class="sched-name">${esc(sc.name || 'Untitled ICP')}</div>
-        <div class="sched-sub">Scheduled — first run <b>${fmtWhen(sc.nextRun)}</b>, then <b>${label}</b>. Not collecting yet.</div>
-        ${sc.lastError ? `<div class="sched-err">Last attempt failed: ${esc(sc.lastError)} — retrying.</div>` : ''}
+        <div class="sched-name">${esc(sc.name || 'Untitled ICP')}<span class="sched-pill ${state}">${stateLabel}</span></div>
+        <div class="sched-sub">${sub}</div>
+        ${outcome}
       </div>
     </div>
-    <button class="sched-cancel" data-cancel="${sc.id}">Cancel</button>
+    <button class="sched-cancel" data-cancel="${sc.id}">${created ? 'Stop' : 'Cancel'}</button>
   </div>`;
 }
 
@@ -145,7 +160,7 @@ export async function renderOffer(id){
     .filter(Boolean);
   await ctx.ensureIcpData(mine.map(s => s.id));   // accurate post counts + instant expand
   await loadSchedules();
-  const pending = schedulesForOffer(id).filter(s => !s.searchId);   // not yet created in Trigify
+  const mySchedules = schedulesForOffer(id);   // pending + active, shown with live outcome
   const missing = (o.searchIds || []).length - mine.length;
   const r = readiness(o);
   const bullets = (arr, neg, pos) => (arr||[]).filter(Boolean).length
@@ -209,7 +224,7 @@ export async function renderOffer(id){
         <span><b>New ICP</b><span class="add-icp-sub">A listening search for this offer</span></span>
       </button>
 
-      ${pending.map(scheduledCardHTML).join('')}
+      ${mySchedules.map(scheduledCardHTML).join('')}
       ${mine.map(s => ctx.rowHTML(s)).join('')}
       ${missing ? `<div class="none-box warnbox">${missing} ICP${missing===1?' was':'s were'}
         deleted in Trigify and no longer exist${missing===1?'s':''}.
@@ -221,14 +236,18 @@ export async function renderOffer(id){
   $('#newIcp').addEventListener('click', () => ctx.go('build', o.id));
   $('#analyze')?.addEventListener('click', () => runAnalysis(o, id));
   $$('[data-cancel]').forEach(b => b.addEventListener('click', async () => {
+    const sc = mySchedules.find(s => s.id === b.dataset.cancel);
+    const created = !!sc?.searchId;
     const ok = await confirmDialog({
-      title: 'Cancel this scheduled ICP?',
-      body: 'It will not be created or run. You can schedule it again later.',
-      confirm: 'Cancel it', danger: true
+      title: created ? 'Stop this scheduled run?' : 'Cancel this scheduled ICP?',
+      body: created
+        ? 'Automatic runs will stop. The ICP and any leads it has produced stay.'
+        : 'It will not be created or run. You can schedule it again later.',
+      confirm: created ? 'Stop' : 'Cancel it', danger: true
     });
     if (!ok) return;
     await cancelSchedule(b.dataset.cancel);
-    ctx.toast('Schedule cancelled');
+    ctx.toast(created ? 'Schedule stopped' : 'Schedule cancelled');
     renderOffer(id);
   }));
   $('#tidy')?.addEventListener('click', async () => {

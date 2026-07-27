@@ -234,17 +234,26 @@ async function runDueSchedule(sch){
   sch.lastRunAt = new Date().toISOString();
 
   if (!anthropic){
-    sch.lastError = 'analysis skipped: ANTHROPIC_API_KEY not set on the server';
+    sch.lastError = 'Analysis skipped — ANTHROPIC_API_KEY not set on the server';
+    sch.lastAnalyzed = 0; sch.lastRecommended = 0;
     console.log(`  scheduler: ANALYSIS SKIPPED for "${sch.name}" — ANTHROPIC_API_KEY not set on the server`);
     return { analyzed: 0, skipped: true };
   }
   try {
     const r = await analyzeOffer(sch.offerId, 0);
+    if (r.error){                                   // e.g. offer has no ICPs
+      sch.lastError = r.error; sch.lastAnalyzed = 0; sch.lastRecommended = 0;
+      console.log(`  scheduler: analysis error for "${sch.name}": ${r.error}`);
+      return { analyzed: 0, failed: true };
+    }
     sch.lastError = null;
+    sch.lastAnalyzed = r.analyzed ?? 0;
+    sch.lastRecommended = r.recommended ?? 0;
     console.log(`  scheduler: analyzed "${sch.name}" → ${r.analyzed ?? 0} posts, ${r.recommended ?? 0} recommended`);
     return { analyzed: r.analyzed ?? 0, skipped: false };
   } catch (e) {
     sch.lastError = e.message;
+    sch.lastAnalyzed = 0; sch.lastRecommended = 0;
     console.log(`  scheduler: analysis failed for "${sch.name}": ${e.message}`);
     return { analyzed: 0, skipped: false, failed: true };
   }
