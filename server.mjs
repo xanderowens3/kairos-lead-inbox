@@ -188,6 +188,9 @@ const FREQ_MS = { 'hourly': HOUR_MS, 'every-12h': 12*HOUR_MS, 'daily': 24*HOUR_M
   'weekly': 7*24*HOUR_MS, 'monthly': 30*24*HOUR_MS, 'quarterly': 90*24*HOUR_MS };
 const intervalMs = sch => FREQ_MS[sch.frequency || sch.payload?.filters?.frequency] || FREQ_MS.daily;
 
+const WARMUP_MS = 15 * 60 * 1000;   // re-check a fresh search this often…
+const MAX_WARMUPS = 4;              // …up to this many times before giving up
+
 async function createSearch(payload){
   const r = await fetch(TRIGIFY + '/searches', {
     method: 'POST', headers: { 'x-api-key': KEY, 'content-type': 'application/json' },
@@ -198,29 +201,60 @@ async function createSearch(payload){
   return body?.data?.id;
 }
 
+/* A just-created search has no results for a short while. Poll until some land
+   (or we give up), so the first analysis has something to score. */
+async function waitForResults(searchId, tries = 9, delayMs = 10000){
+  for (let i = 0; i < tries; i++){
+    try {
+      const rows = (await tg(`/searches/${searchId}/results?limit=1`))?.data;
+      if (Array.isArray(rows) && rows.length) return true;
+    } catch { /* keep polling */ }
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return false;
+}
+
 async function runDueSchedule(sch){
-  // first run: create the Trigify search and attach it to the offer
+  // first run: create the Trigify search, attach it, and let it collect
   if (!sch.searchId){
     const id = await createSearch(sch.payload);
     sch.searchId = id;
     sch.status = 'active';
+    sch.warming = true;
+    sch.warmups = 0;
     const offers = await getOffers();
     const off = offers.find(o => o.id === sch.offerId);
     if (off){
       off.searchIds = [...new Set([...(off.searchIds || []), id])];
       await saveOffers(offers);
     }
-    console.log(`  scheduler: created ICP "${sch.name}" → ${id}`);
-  }
-  // deliver leads (Trigify backfills recent posts on creation, so day one can yield leads)
-  if (anthropic){
-    try {
-      const r = await analyzeOffer(sch.offerId, 0);
-      console.log(`  scheduler: analyzed "${sch.name}" → ${r.recommended ?? 0} recommended`);
-    } catch (e) { console.log(`  scheduler: analysis failed for "${sch.name}": ${e.message}`); }
+    console.log(`  scheduler: created ICP "${sch.name}" → ${id}, waiting for first results…`);
+    await waitForResults(id);
   }
   sch.lastRunAt = new Date().toISOString();
-  sch.lastError = null;
+
+  if (!anthropic){
+    sch.lastError = 'analysis skipped: ANTHROPIC_API_KEY not set on the server';
+    console.log(`  scheduler: ANALYSIS SKIPPED for "${sch.name}" — ANTHROPIC_API_KEY not set on the server`);
+    return { analyzed: 0, skipped: true };
+  }
+  try {
+    const r = await analyzeOffer(sch.offerId, 0);
+    sch.lastError = null;
+    console.log(`  scheduler: analyzed "${sch.name}" → ${r.analyzed ?? 0} posts, ${r.recommended ?? 0} recommended`);
+    return { analyzed: r.analyzed ?? 0, skipped: false };
+  } catch (e) {
+    sch.lastError = e.message;
+    console.log(`  scheduler: analysis failed for "${sch.name}": ${e.message}`);
+    return { analyzed: 0, skipped: false, failed: true };
+  }
+}
+
+function advance(sch){   // to the next occurrence at the ICP's frequency
+  const step = intervalMs(sch);
+  let next = new Date(sch.nextRun).getTime();
+  while (next <= Date.now()) next += step;
+  sch.nextRun = new Date(next).toISOString();
 }
 
 let ticking = false;
@@ -234,12 +268,17 @@ async function schedulerTick(){
     for (const sch of schedules){
       if (!sch.nextRun || new Date(sch.nextRun).getTime() > now) continue;
       try {
-        await runDueSchedule(sch);
-        // advance by the ICP's frequency, skipping any missed cycles
-        const step = intervalMs(sch);
-        let next = new Date(sch.nextRun).getTime();
-        while (next <= Date.now()) next += step;
-        sch.nextRun = new Date(next).toISOString();
+        const res = await runDueSchedule(sch);
+        // if a fresh search hasn't collected yet, re-check soon instead of
+        // waiting a whole cycle — but don't loop forever
+        if (sch.warming && !res.skipped && res.analyzed === 0 && (sch.warmups || 0) < MAX_WARMUPS){
+          sch.warmups = (sch.warmups || 0) + 1;
+          sch.nextRun = new Date(Date.now() + WARMUP_MS).toISOString();
+        } else {
+          sch.warming = false;
+          sch.warmups = 0;
+          advance(sch);
+        }
       } catch (e) {
         sch.lastError = e.message;
         sch.nextRun = new Date(now + 10 * 60 * 1000).toISOString();   // retry in 10 min
