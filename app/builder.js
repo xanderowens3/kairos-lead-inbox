@@ -3,7 +3,8 @@
    ========================================================================== */
 import { TYPES, PLATFORMS, ICONS, FREQUENCY, TIME_FRAME, LI_SORT, LI_CONTENT,
          buildPayload, blank, verifyResults } from './schema.js';
-import { loadOffers, offerById, attachSearch, thresholdFor, setThreshold, offerForSearch } from './offers.js';
+import { loadOffers, offers, offerById, attachSearch, detachSearch,
+         thresholdFor, setThreshold, offerForSearch } from './offers.js';
 import { addSchedule, loadSchedules, allSchedules, cancelSchedule } from './schedules.js';
 import { initOffers, renderOffers, renderOffer, scheduleStripHTML } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads } from './views-leads.js';
@@ -729,6 +730,12 @@ async function del(id, refreshView){
   if (!yes) return;
   const { ok } = await api(`/searches/${id}`, { method:'DELETE' });
   toast(ok ? 'Deleted' : 'Delete failed', !ok);
+  if (ok){
+    // drop the reference from any offer so no "ICP went missing" warning lingers
+    for (const o of offers().filter(x => (x.searchIds || []).includes(id))){
+      await detachSearch(o.id, id);
+    }
+  }
   delete results[id]; delete details[id];
   await loadSearches(); loadCredits(); refreshView();
 }
