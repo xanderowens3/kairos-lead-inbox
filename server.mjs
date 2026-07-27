@@ -284,6 +284,8 @@ async function runDueSchedule(sch, schedules){
     const off = offers.find(o => o.id === sch.offerId);
     if (off){
       off.searchIds = [...new Set([...(off.searchIds || []), id])];
+      if (sch.minScore != null)               // inbox threshold chosen when the ICP was built
+        off.icpThresholds = { ...(off.icpThresholds || {}), [id]: sch.minScore };
       await saveOffers(offers);
     }
     console.log(`  scheduler: created ICP "${sch.name}" → ${id}, waiting for first results…`);

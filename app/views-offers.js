@@ -30,7 +30,7 @@ function scheduledCardHTML(sc){
   const stateLabel = { scheduled:'Scheduled', warming:'Warming up', active:'Active' }[state];
 
   const sub = !created
-    ? `First run <b>${fmtWhen(sc.nextRun)}</b>, then <b>${label}</b>. Not collecting yet.`
+    ? `First run <b>${fmtWhen(sc.nextRun)}</b>, then <b>${label}</b>${sc.minScore != null ? ` · inbox at <b>${sc.minScore}+</b>` : ''}. Not collecting yet.`
     : `Runs <b>${label}</b> · next run <b>${fmtWhen(sc.nextRun)}</b>${sc.warming ? ' · waiting for first results' : ''}`;
 
   let outcome = '';

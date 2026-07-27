@@ -4,7 +4,7 @@
 import { TYPES, PLATFORMS, ICONS, FREQUENCY, TIME_FRAME, LI_SORT, LI_CONTENT,
          buildPayload, blank, verifyResults } from './schema.js';
 import { loadOffers, offers, offerById, attachSearch, detachSearch,
-         thresholdFor, setThreshold, offerForSearch } from './offers.js';
+         thresholdFor, setThreshold, offerForSearch, DEFAULT_MIN_SCORE } from './offers.js';
 import { addSchedule, loadSchedules, allSchedules, cancelSchedule } from './schedules.js';
 import { initOffers, renderOffers, renderOffer, scheduleStripHTML } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads } from './views-leads.js';
@@ -34,6 +34,7 @@ const FREQ_LABEL = { 'hourly':'every hour', 'every-12h':'every 12 hours', 'daily
   'weekly':'every week', 'monthly':'every month', 'quarterly':'every 3 months' };
 let sched = defaultSched();          // ICP run scheduling (builder state)
 let schedValid = true;               // is the chosen date+time in the future?
+let minScore = DEFAULT_MIN_SCORE;    // inbox threshold chosen at creation time
 let icpOpen = {}, icpLoading = {}, icpView = {}, details = {};   // per-ICP state
 
 /* The list endpoint returns only a summary (no query/filters), so fetch each
@@ -103,7 +104,8 @@ function go(v, arg){
   if (v === 'offer'){  currentOffer = null; return renderOffer(arg); }
   if (v === 'list'){   currentOffer = null; return renderList(); }
   currentOffer = arg ?? null;
-  sched = defaultSched();   // fresh scheduling defaults per new build
+  sched = defaultSched();          // fresh scheduling defaults per new build
+  minScore = DEFAULT_MIN_SCORE;
   renderBuild();
 }
 $$('.nav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); go(a.dataset.view); }));
@@ -152,15 +154,32 @@ function renderBuild(){
         <div class="sec-b">${filterFields(t)}</div>
       </section>
 
+      ${off ? `<section class="sec">
+        <div class="sec-h"><span class="sec-n">4</span><h2>What reaches your <em>inbox</em></h2></div>
+        <div class="sec-b">
+          <div class="field">
+            <label>Minimum score</label>
+            <div class="thr-row">
+              <input type="range" id="f_minscore" min="0" max="100" step="5" value="${minScore}" class="rev-slider wide">
+              <span class="thr-num" id="minScoreVal">${minScore}</span>
+            </div>
+            <p class="hint">The agent scores every post 0&ndash;100 against <b>${esc(off.name)}</b>.
+              Anything at <b id="minScoreEcho">${minScore}</b> or above lands in your inbox; the rest stay in this ICP's
+              <b>Review &amp; rank</b> tab, where you can promote any you'd still want.
+              <span class="thr-tip" id="thrTip"></span></p>
+          </div>
+        </div>
+      </section>` : ''}
+
       <section class="sec">
-        <div class="sec-h"><span class="sec-n">4</span><h2>Name <em>it</em></h2></div>
+        <div class="sec-h"><span class="sec-n">${off?5:4}</span><h2>Name <em>it</em></h2></div>
         <div class="sec-b"><div class="field">
           <input type="text" id="f_name" value="${esc(s.name)}" placeholder="Agency hiring intent">
         </div></div>
       </section>
 
       ${off ? `<section class="sec">
-        <div class="sec-h"><span class="sec-n">5</span><h2>When to <em>run</em></h2></div>
+        <div class="sec-h"><span class="sec-n">6</span><h2>When to <em>run</em></h2></div>
         <div class="sec-b">
           <div class="runmodes">
             <button type="button" class="runmode ${sched.mode==='now'?'on':''}" data-mode="now">
@@ -295,12 +314,27 @@ function bind(){
     if (when) when.style.display = sched.mode === 'daily' ? 'block' : 'none';
     updateSchedSummary();
   }));
+  $('#f_minscore')?.addEventListener('input', e => { minScore = Number(e.target.value); paintMinScore(); });
+  paintMinScore();
   $('#f_rundate')?.addEventListener('input', e => { sched.date = e.target.value; syncTimeMin(); updateSchedSummary(); });
   $('#f_runtime')?.addEventListener('input', e => { sched.time = e.target.value; updateSchedSummary(); });
   $('#f_freq')?.addEventListener('change', updateSchedSummary);   // recurrence text follows frequency
   syncTimeMin(); updateSchedSummary();
 
   $('#create')?.addEventListener('click', create);
+}
+
+/* live readout + plain-language guidance for the inbox threshold */
+function paintMinScore(){
+  const num = $('#minScoreVal'); if (num) num.textContent = minScore;
+  const echo = $('#minScoreEcho'); if (echo) echo.textContent = minScore;
+  const tip = $('#thrTip');
+  if (tip) tip.textContent =
+    minScore <= 30 ? 'Very open — nearly everything scored will reach you.'
+  : minScore <= 45 ? 'A wide net — you will see marginal fits as well as strong ones.'
+  : minScore <= 65 ? 'Balanced — strong and plausible fits get through, weak ones do not.'
+  : minScore <= 85 ? 'Selective — only clear, well-evidenced fits reach the inbox.'
+  : 'Very strict — only near-perfect matches will ever appear.';
 }
 
 /* the chosen first run as a Date, or null if incomplete/invalid */
@@ -385,9 +419,12 @@ async function create(){
   if (ok){
     const id = body?.data?.id;
     const back = currentOffer;
-    if (back && id) await attachSearch(back, id);
+    if (back && id){
+      await attachSearch(back, id);
+      await setThreshold(id, minScore);      // the inbox bar chosen during creation
+    }
     toast('ICP created');
-    s = blank(); sched = defaultSched();
+    s = blank(); sched = defaultSched(); minScore = DEFAULT_MIN_SCORE;
     await loadSearches(); loadCredits();
     back ? go('offer', back) : go('list');
   } else {
@@ -412,6 +449,7 @@ async function scheduleIcp(){
     name: s.name || 'Untitled ICP',
     payload: buildPayload(s),
     frequency: s.frequency,
+    minScore,                                // applied to the offer when the search is created
     timeOfDay: sched.time,
     nextRun: runDate.toISOString(),
     searchId: null,
@@ -423,7 +461,7 @@ async function scheduleIcp(){
   const ok = await addSchedule(rec);
   if (ok){
     toast('ICP scheduled');
-    s = blank(); sched = defaultSched();
+    s = blank(); sched = defaultSched(); minScore = DEFAULT_MIN_SCORE;
     go('offer', currentOffer);
   } else {
     toast('Could not schedule', true);

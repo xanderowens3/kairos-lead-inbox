@@ -663,6 +663,14 @@ textarea::placeholder{color:var(--faint)}
   border:none;background:transparent;padding:0}
 .rev-slider:hover,.rev-slider:focus{border:none;box-shadow:none}
 
+/* threshold control inside the ICP builder */
+.thr-row{display:flex;align-items:center;gap:16px}
+.rev-slider.wide{flex:1;width:auto}
+.thr-num{flex-shrink:0;min-width:56px;text-align:center;font-family:var(--serif);font-size:22px;
+  font-weight:700;color:var(--blue-deep);background:var(--blue-tint);border-radius:9px;padding:6px 0;
+  font-variant-numeric:tabular-nums}
+.thr-tip{display:block;margin-top:5px;color:var(--blue-deep);font-weight:600}
+
 .rev-list{display:flex;flex-direction:column}
 .rev-row{display:flex;align-items:center;gap:12px;padding:11px 6px;border-top:1px solid var(--line-soft)}
 .rev-row:first-child{border-top:none}
