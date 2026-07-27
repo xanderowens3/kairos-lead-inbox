@@ -9,7 +9,7 @@ import { addSchedule, loadSchedules, allSchedules, cancelSchedule } from './sche
 import { initOffers, renderOffers, renderOffer, scheduleStripHTML } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads } from './views-leads.js';
 import { loadLeads, countInbox, leadsForIcp, isRecommended,
-         promoteLead, pinGolden, rateLead, leadById } from './leads.js';
+         promoteLead, pinGolden, rateLead, leadById, analyzeOffer } from './leads.js';
 import { confirmDialog } from './modal.js';
 
 const $  = s => document.querySelector(s);
@@ -510,14 +510,12 @@ export function rowHTML(row){
     ${open ? `<div class="icp-body">
       <div class="icp-tabs">
         <button class="itab ${view==='results'?'on':''}" data-tab="results" data-id="${x.id}">Results</button>
-        <button class="itab ${view==='review'?'on':''}" data-tab="review" data-id="${x.id}">Review &amp; rank</button>
         <button class="itab ${view==='config'?'on':''}" data-tab="config" data-id="${x.id}">Configuration</button>
         ${view==='results' && results[x.id] ? `<button class="linkbtn icp-refresh" data-refresh="${x.id}">↻ Refresh</button>` : ''}
       </div>
       ${view === 'config' ? configHTML(x)
-        : view === 'review' ? reviewHTML(x.id)
         : icpLoading[x.id] ? `<div class="res-loading">Loading results…</div>`
-        : results[x.id] ? resultsHTML(results[x.id], q)
+        : results[x.id] ? resultsHTML(results[x.id], q, x.id)
         : `<div class="res-empty">No results loaded.</div>`}
     </div>` : ''}
   </div>`;
@@ -554,56 +552,6 @@ function configHTML(x){
   </div>`;
 }
 
-/* Review & rank: every post scored for this ICP, ranked, with the inbox line
-   drawn at the ICP's threshold. Rate, promote below-threshold posts, pin golden. */
-function reviewHTML(icpId){
-  const leads = leadsForIcp(icpId);                 // score desc
-  const thr = thresholdFor(icpId);
-  const attached = !!offerForSearch(icpId);
-  if (!attached) return `<div class="res-empty">This ICP isn't attached to an offer, so its posts aren't scored.</div>`;
-  const inInbox = leads.filter(isRecommended).length;
-  // The threshold is always settable — even before any posts are scored — so you
-  // can decide the inbox cutoff up front. The ranked list fills in after analysis.
-  return `<div class="rev">
-    <div class="rev-thr">
-      <div class="rev-thr-txt">
-        <label>Inbox threshold</label>
-        <p>Posts scoring <b class="thr-val" data-thrval="${icpId}">${thr}</b> or above go to the inbox${
-          leads.length ? ` &middot; <b>${inInbox}</b> of ${leads.length} qualify now` : ''}.</p>
-      </div>
-      <input type="range" min="0" max="100" step="5" value="${thr}" class="rev-slider" data-thr="${icpId}">
-    </div>
-    ${leads.length
-      ? `<div class="rev-list">${leads.map(l => reviewRowHTML(l, thr)).join('')}</div>`
-      : `<div class="res-empty">No posts scored yet — run analysis on the offer to fill this in. Your threshold is saved and will apply.</div>`}
-  </div>`;
-}
-
-function reviewRowHTML(l, thr){
-  const rec = isRecommended(l);
-  const status = rec ? (l.promoted && l.score < thr ? 'promoted in' : 'in inbox') : 'below line';
-  const promoteBtn = l.promoted
-    ? `<button class="rev-btn on" data-promote="${l.id}">Promoted</button>`
-    : (l.score < thr ? `<button class="rev-btn" data-promote="${l.id}">Promote</button>` : '');
-  return `<div class="rev-row ${rec?'in':'out'}">
-    <div class="rev-score ${rec?'in':''}">${l.score}</div>
-    <div class="rev-main">
-      <div class="rev-head">
-        <span class="rev-name">${esc(l.author || 'Unknown')}</span>
-        ${l.golden ? `<span class="rev-gold">★</span>` : ''}
-        <span class="rev-status">${status}</span>
-      </div>
-      <div class="rev-reason">${esc(l.reason || '')}</div>
-    </div>
-    <div class="rev-acts">
-      ${promoteBtn}
-      <button class="rev-ic good ${l.rating==='good'?'on':''}" data-rate="good" data-rlead="${l.id}" title="Good fit">✓</button>
-      <button class="rev-ic bad ${l.rating==='bad'?'on':''}" data-rate="bad" data-rlead="${l.id}" title="Not a fit">✕</button>
-      <button class="rev-ic gold ${l.golden?'on':''}" data-gold="${l.id}" title="Pin as a permanent example">★</button>
-    </div>
-  </div>`;
-}
-
 export function bindRows(refreshView){
   // In-place row actions rebuild the view; keep the reader where they were
   // instead of snapping back to the top.
@@ -634,7 +582,20 @@ export function bindRows(refreshView){
     expanded[x.dataset.exp] = !expanded[x.dataset.exp]; refresh();
   }));
 
-  // review & rank actions
+  // score every collected post that hasn't been judged yet
+  $$('[data-analyze]').forEach(b => b.addEventListener('click', async e => {
+    e.stopPropagation();
+    const label = b.textContent;
+    b.disabled = true; b.textContent = 'Analyzing…';
+    const r = await analyzeOffer(b.dataset.analyze);
+    b.disabled = false; b.textContent = label;
+    if (r.error) return toast(r.error, true);
+    toast(`${r.analyzed} analyzed · ${r.recommended} to inbox`
+      + (r.failedBatches ? ` · ${r.failedBatches} batch(es) failed` : ''));
+    await loadLeads(); syncInboxCount(); refresh();
+  }));
+
+  // ranking actions on scored posts
   $$('[data-thr]').forEach(sl => {
     sl.addEventListener('input', () => {
       const lbl = document.querySelector(`[data-thrval="${sl.dataset.thr}"]`);
@@ -673,7 +634,7 @@ async function openIcp(id, view, refresh){
   if (icpOpen[id] && (icpView[id] || 'results') === view){ icpOpen[id] = false; return refresh(); }
   icpOpen[id] = true;
   icpView[id] = view;
-  if (view === 'review') await loadLeads();          // review reads the leads store
+  if (view === 'results') await loadLeads();          // results show each post's score
   if (view === 'results' && !results[id]){
     icpLoading[id] = true; await refresh();
     const { ok, body } = await api(`/searches/${id}/results?limit=100`);
@@ -683,28 +644,46 @@ async function openIcp(id, view, refresh){
   refresh();
 }
 
-function resultsHTML(rows, query){
-  if (!rows.length) return `<div class="res-empty">Nothing collected yet.</div>`;
-  const { matched, dropped } = verifyResults(rows, query || {});
+/* Results = every collected post, with its score and ranking controls once the
+   agent has judged it. Scored posts rank first (highest score at the top) with
+   the inbox line drawn at the ICP's threshold; unscored posts follow. */
+function resultsHTML(rows, query, icpId){
+  const off = offerForSearch(icpId);
+  const thr = thresholdFor(icpId);
+  const byPost = {};
+  leadsForIcp(icpId).forEach(l => { byPost[l.postId] = l; });
+
+  const scored   = rows.filter(r => byPost[r.id]).sort((a,b) => byPost[b.id].score - byPost[a.id].score);
+  const unscored = rows.filter(r => !byPost[r.id]);
+  const inInbox  = scored.filter(r => isRecommended(byPost[r.id])).length;
+
+  const head = off ? `
+    <div class="rev-thr">
+      <div class="rev-thr-txt">
+        <label>Inbox threshold</label>
+        <p>Posts scoring <b class="thr-val" data-thrval="${icpId}">${thr}</b> or above go to the inbox${
+          scored.length ? ` &middot; <b>${inInbox}</b> of ${scored.length} scored qualify` : ''}.</p>
+      </div>
+      <input type="range" min="0" max="100" step="5" value="${thr}" class="rev-slider" data-thr="${icpId}">
+    </div>
+    ${unscored.length ? `<div class="res-note analyze-note">
+      <b>${unscored.length}</b> post${unscored.length===1?'':'s'} not scored yet.
+      <button class="btn btn-p sm" data-analyze="${off.id}">Analyze ${unscored.length} now</button></div>` : ''}` : '';
+
+  if (!rows.length) return `<div class="res">${head}<div class="res-empty">Nothing collected yet.</div></div>`;
+
   const people = rows.filter(r => isPerson(r.author?.profile_url)).length;
-  const hasKw = (query?.keywords_and?.length || query?.keywords?.length || query?.keywords_not?.length);
-  // Everything Trigify returned is shown — full keyword matches first, then the
-  // looser ones. Strong pain-point posts rarely use your exact words, so the
-  // partial matches are often the better leads. Qualification is the real filter.
   return `<div class="res">
+    ${head}
     <div class="res-h">${rows.length} collected &middot; ${people} from people, ${rows.length-people} from company pages
-      ${hasKw ? `&middot; <b>${matched.length}</b> contain every keyword` : ''}</div>
-    ${hasKw && dropped.length ? `<div class="res-note">
-      The ${matched.length} with a <span class="mtag full">✓ all keywords</span> badge contain every
-      term literally. The ${dropped.length} marked <span class="mtag part">partial</span> matched loosely —
-      often the stronger leads, since good posts seldom use your exact phrasing. All are shown; the
-      offer qualifier judges them on meaning, not wording.</div>` : ''}
-    ${matched.map(r => cardHTML(r, true)).join('')}
-    ${dropped.map(r => cardHTML(r, false)).join('')}
+      ${scored.length ? `&middot; <b>${scored.length}</b> scored` : ''}</div>
+    ${scored.map(r => cardHTML(r, undefined, byPost[r.id], thr)).join('')}
+    ${unscored.length && scored.length ? `<div class="res-div">Not scored yet</div>` : ''}
+    ${unscored.map(r => cardHTML(r)).join('')}
   </div>`;
 }
 
-function cardHTML(r, isFull){
+function cardHTML(r, isFull, lead, thr){
   const person = isPerson(r.author?.profile_url);
   const text = r.content?.text || '';
   const open = expanded[r.id];
@@ -715,18 +694,31 @@ function cardHTML(r, isFull){
   const mtag = isFull === undefined ? ''
     : isFull ? `<span class="mtag full">✓ all keywords</span>`
              : `<span class="mtag part">partial</span>`;
-  return `<div class="res-c${isFull === false ? ' partial' : ''}">
+
+  const rec = lead ? isRecommended(lead) : false;
+  return `<div class="res-c${isFull === false ? ' partial' : ''}${lead ? (rec?' scored in':' scored out') : ''}">
     <div class="res-top">
+      ${lead ? `<span class="res-score ${rec?'in':''}">${lead.score}</span>` : ''}
       <span class="who">${esc(r.author?.name || 'Unknown')}</span>
       <span class="badge ${person?'p':'c'}">${person?'Person':'Company page'}</span>
       ${mtag}
+      ${lead ? `<span class="rev-status">${rec ? (lead.promoted && lead.score < thr ? 'promoted in' : 'in inbox') : 'below line'}</span>` : ''}
       <span class="when">${esc(when)}</span></div>
+    ${lead?.reason ? `<div class="res-reason">${esc(lead.reason)}</div>` : ''}
     <div class="res-body${open?' open':''}">${esc(shown)}${!open && text.length>240?'…':''}</div>
     ${text.length > 240 ? `<button class="more" data-exp="${r.id}">${open?'Show less':'Show full post'}</button>` : ''}
     <div class="res-f">
       <a href="${esc(r.content?.url||'#')}" target="_blank" rel="noopener" class="lk">Open post &#8599;</a>
       ${r.author?.profile_url?`<a href="${esc(r.author.profile_url)}" target="_blank" rel="noopener" class="lk">Profile &#8599;</a>`:''}
-      <span class="mut">${e.likes ?? 0} likes &middot; ${e.comments ?? 0} comments</span></div>
+      <span class="mut">${e.likes ?? 0} likes &middot; ${e.comments ?? 0} comments</span>
+      ${lead ? `<span class="res-acts">
+        ${lead.score < thr || lead.promoted
+          ? `<button class="rev-btn ${lead.promoted?'on':''}" data-promote="${lead.id}">${lead.promoted?'Promoted':'Promote'}</button>` : ''}
+        <button class="rev-ic good ${lead.rating==='good'?'on':''}" data-rate="good" data-rlead="${lead.id}" title="Good fit">✓</button>
+        <button class="rev-ic bad ${lead.rating==='bad'?'on':''}" data-rate="bad" data-rlead="${lead.id}" title="Not a fit">✕</button>
+        <button class="rev-ic gold ${lead.golden?'on':''}" data-gold="${lead.id}" title="Pin as a permanent example">★</button>
+      </span>` : ''}
+    </div>
   </div>`;
 }
 

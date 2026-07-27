@@ -349,9 +349,14 @@ async function schedulerTick(){
       if (!sch.nextRun || new Date(sch.nextRun).getTime() > now) continue;
       try {
         const res = await runDueSchedule(sch, schedules);
-        // if a fresh search hasn't collected yet, re-check soon instead of
-        // waiting a whole cycle — but don't loop forever
-        if (sch.warming && !res.skipped && res.analyzed === 0 && (sch.warmups || 0) < MAX_WARMUPS){
+        // A run that ERRORED is not a completed cycle — retry it soon rather
+        // than going dormant until the next occurrence (which previously let a
+        // transient API failure silently skip a whole day).
+        if (res.failed){
+          sch.nextRun = new Date(Date.now() + WARMUP_MS).toISOString();
+        }
+        // a fresh search may not have collected yet — re-check soon, bounded
+        else if (sch.warming && !res.skipped && res.analyzed === 0 && (sch.warmups || 0) < MAX_WARMUPS){
           sch.warmups = (sch.warmups || 0) + 1;
           sch.nextRun = new Date(Date.now() + WARMUP_MS).toISOString();
         } else {

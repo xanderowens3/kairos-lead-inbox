@@ -663,6 +663,20 @@ textarea::placeholder{color:var(--faint)}
   font-variant-numeric:tabular-nums}
 .thr-tip{display:block;margin-top:5px;color:var(--blue-deep);font-weight:600}
 
+/* scoring shown inside the Results list */
+.res-score{flex-shrink:0;min-width:30px;height:26px;border-radius:7px;display:inline-flex;
+  align-items:center;justify-content:center;padding:0 7px;font-family:var(--serif);font-size:14px;
+  font-weight:700;font-variant-numeric:tabular-nums;background:#EEF1F6;color:var(--muted)}
+.res-score.in{background:var(--blue-tint);color:var(--blue-deep)}
+.res-c.scored.out{opacity:.72}
+.res-c.scored.in{border-color:#BBD0F0}
+.res-reason{font-size:12px;color:var(--muted);line-height:1.5;margin:2px 0 8px;font-style:italic}
+.res-acts{display:inline-flex;align-items:center;gap:6px;margin-left:auto}
+.res-div{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--muted);margin:20px 0 12px;padding-top:12px;border-top:1px solid var(--line-soft)}
+.analyze-note{display:flex;align-items:center;gap:12px;justify-content:space-between}
+.analyze-note .btn{flex-shrink:0}
+
 .rev-list{display:flex;flex-direction:column}
 .rev-row{display:flex;align-items:center;gap:12px;padding:11px 6px;border-top:1px solid var(--line-soft)}
 .rev-row:first-child{border-top:none}
