@@ -16,7 +16,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { judgeBatch, BATCH, MODEL } from './app/qualify-core.mjs';
 import { verifyResults } from './app/schema.js';
 import { initDb, usingDb, getOffers, saveOffers, getLeads, saveLeads,
-         getProfiles, saveProfiles } from './db.mjs';
+         getProfiles, saveProfiles, getSchedules, saveSchedules } from './db.mjs';
 
 /* $ per million tokens [input, output]. Sonnet 5 intro pricing runs to 2026-08-31. */
 const RATES = {
@@ -177,6 +177,78 @@ async function analyzeOffer(offerId, maxPosts){
            cost: +cost.toFixed(4), enrichCredits, cacheRead };
 }
 
+/* ---------- scheduler: deferred ICP creation + daily analysis ----------
+   A scheduled ICP holds a Trigify create-payload but isn't created yet. When
+   its nextRun arrives, we create the search in Trigify (first run → collection
+   begins), attach it to the offer, then run analysis so leads land in the inbox.
+   Each run advances nextRun by 24h, so leads refresh every morning at the set
+   time. Runs entirely in this always-on server — no external cron. */
+const DAY_MS = 24 * 3600 * 1000;
+
+async function createSearch(payload){
+  const r = await fetch(TRIGIFY + '/searches', {
+    method: 'POST', headers: { 'x-api-key': KEY, 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body?.error?.message || `Trigify ${r.status}`);
+  return body?.data?.id;
+}
+
+async function runDueSchedule(sch){
+  // first run: create the Trigify search and attach it to the offer
+  if (!sch.searchId){
+    const id = await createSearch(sch.payload);
+    sch.searchId = id;
+    sch.status = 'active';
+    const offers = await getOffers();
+    const off = offers.find(o => o.id === sch.offerId);
+    if (off){
+      off.searchIds = [...new Set([...(off.searchIds || []), id])];
+      await saveOffers(offers);
+    }
+    console.log(`  scheduler: created ICP "${sch.name}" → ${id}`);
+  }
+  // deliver leads (Trigify backfills recent posts on creation, so day one can yield leads)
+  if (anthropic){
+    try {
+      const r = await analyzeOffer(sch.offerId, 0);
+      console.log(`  scheduler: analyzed "${sch.name}" → ${r.recommended ?? 0} recommended`);
+    } catch (e) { console.log(`  scheduler: analysis failed for "${sch.name}": ${e.message}`); }
+  }
+  sch.lastRunAt = new Date().toISOString();
+  sch.lastError = null;
+}
+
+let ticking = false;
+async function schedulerTick(){
+  if (ticking) return;                    // never overlap runs
+  ticking = true;
+  try {
+    const schedules = await getSchedules();
+    const now = Date.now();
+    let changed = false;
+    for (const sch of schedules){
+      if (!sch.nextRun || new Date(sch.nextRun).getTime() > now) continue;
+      try {
+        await runDueSchedule(sch);
+        // advance to the next day at the same time, skipping any missed days
+        let next = new Date(sch.nextRun).getTime();
+        while (next <= Date.now()) next += DAY_MS;
+        sch.nextRun = new Date(next).toISOString();
+      } catch (e) {
+        sch.lastError = e.message;
+        sch.nextRun = new Date(now + 10 * 60 * 1000).toISOString();   // retry in 10 min
+        console.log(`  scheduler: "${sch.name}" failed — ${e.message} (retry in 10m)`);
+      }
+      changed = true;
+    }
+    if (changed) await saveSchedules(schedules);
+  } catch (e) {
+    console.log('  scheduler tick error:', e.message);
+  } finally { ticking = false; }
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
@@ -199,6 +271,18 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       if (!Array.isArray(body)) return send(res, 400, JSON.stringify({ error:'expected an array' }));
       await saveLeads(body);
+      return send(res, 200, JSON.stringify({ ok:true, count: body.length }));
+    }
+    return send(res, 405, JSON.stringify({ error:'method not allowed' }));
+  }
+
+  /* ---------- schedules store ---------- */
+  if (url.pathname === '/data/schedules') {
+    if (req.method === 'GET') return send(res, 200, JSON.stringify(await getSchedules()));
+    if (req.method === 'PUT') {
+      const body = await readBody(req);
+      if (!Array.isArray(body)) return send(res, 400, JSON.stringify({ error:'expected an array' }));
+      await saveSchedules(body);
       return send(res, 200, JSON.stringify({ ok:true, count: body.length }));
     }
     return send(res, 405, JSON.stringify({ error:'method not allowed' }));
@@ -258,5 +342,9 @@ try {
 
 server.listen(PORT, HOST, () => {
   console.log(`  Kairos → http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
-  console.log(`  analysis: ${anthropic ? 'ready (' + MODEL + ')' : 'DISABLED — ANTHROPIC_API_KEY not set'}\n`);
+  console.log(`  analysis: ${anthropic ? 'ready (' + MODEL + ')' : 'DISABLED — ANTHROPIC_API_KEY not set'}`);
+  // scheduler: check every minute for ICPs whose run time has arrived
+  setInterval(schedulerTick, 60 * 1000);
+  schedulerTick();
+  console.log(`  scheduler: on (checks every 60s)\n`);
 });

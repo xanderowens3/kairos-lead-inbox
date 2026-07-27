@@ -14,10 +14,11 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const HERE     = dirname(fileURLToPath(import.meta.url));
-const OFFERS   = join(HERE, 'data', 'offers.json');
-const LEADS    = join(HERE, 'data', 'leads.json');
-const PROFILES = join(HERE, 'data', 'profiles.json');
+const HERE      = dirname(fileURLToPath(import.meta.url));
+const OFFERS    = join(HERE, 'data', 'offers.json');
+const LEADS     = join(HERE, 'data', 'leads.json');
+const PROFILES  = join(HERE, 'data', 'profiles.json');
+const SCHEDULES = join(HERE, 'data', 'schedules.json');
 
 export const usingDb = !!process.env.DATABASE_URL;
 
@@ -54,6 +55,16 @@ export async function initDb(){
     CREATE TABLE IF NOT EXISTS profiles (
       url text PRIMARY KEY,
       data jsonb,
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS schedules (
+      id text PRIMARY KEY,
+      data jsonb NOT NULL,
+      name text GENERATED ALWAYS AS (data->>'name') STORED,
+      offer_name text GENERATED ALWAYS AS (data->>'offerName') STORED,
+      status text GENERATED ALWAYS AS (data->>'status') STORED,
+      next_run text GENERATED ALWAYS AS (data->>'nextRun') STORED,
+      seq bigserial,
       updated_at timestamptz DEFAULT now()
     );
   `);
@@ -100,10 +111,12 @@ async function saveArray(table, path, arr){
   finally { client.release(); }
 }
 
-export const getOffers = ()    => getArray('offers', OFFERS);
-export const saveOffers = arr  => saveArray('offers', OFFERS, arr);
-export const getLeads   = ()    => getArray('leads', LEADS);
-export const saveLeads  = arr  => saveArray('leads', LEADS, arr);
+export const getOffers    = ()    => getArray('offers', OFFERS);
+export const saveOffers   = arr  => saveArray('offers', OFFERS, arr);
+export const getLeads     = ()    => getArray('leads', LEADS);
+export const saveLeads    = arr  => saveArray('leads', LEADS, arr);
+export const getSchedules = ()    => getArray('schedules', SCHEDULES);
+export const saveSchedules= arr  => saveArray('schedules', SCHEDULES, arr);
 
 /* ---------- profile cache (keyed by URL, null = looked-up-empty) ---------- */
 export async function getProfiles(){

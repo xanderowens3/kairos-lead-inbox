@@ -4,6 +4,7 @@
 import { TYPES, PLATFORMS, ICONS, FREQUENCY, TIME_FRAME, LI_SORT, LI_CONTENT,
          buildPayload, blank, verifyResults } from './schema.js';
 import { loadOffers, offerById, attachSearch } from './offers.js';
+import { addSchedule, nextOccurrence } from './schedules.js';
 import { initOffers, renderOffers, renderOffer } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads } from './views-leads.js';
 import { loadLeads, countInbox } from './leads.js';
@@ -19,6 +20,7 @@ let s = blank();
 let searches = [];
 let apiError = null, lastError = null;
 let results = {}, expanded = {}, showMore = false;
+let sched = { mode: 'now', time: '09:00' };   // ICP run scheduling (builder state)
 let icpOpen = {}, icpLoading = {}, icpView = {}, details = {};   // per-ICP state
 
 /* The list endpoint returns only a summary (no query/filters), so fetch each
@@ -88,6 +90,7 @@ function go(v, arg){
   if (v === 'offer'){  currentOffer = null; return renderOffer(arg); }
   if (v === 'list'){   currentOffer = null; return renderList(); }
   currentOffer = arg ?? null;
+  sched = { mode: 'now', time: '09:00' };   // fresh scheduling defaults per new build
   renderBuild();
 }
 $$('.nav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); go(a.dataset.view); }));
@@ -140,6 +143,25 @@ function renderBuild(){
           <input type="text" id="f_name" value="${esc(s.name)}" placeholder="Agency hiring intent">
         </div></div>
       </section>
+
+      ${off ? `<section class="sec">
+        <div class="sec-h"><span class="sec-n">5</span><h2>When to <em>run</em></h2></div>
+        <div class="sec-b">
+          <div class="runmodes">
+            <button type="button" class="runmode ${sched.mode==='now'?'on':''}" data-mode="now">
+              <b>Run now</b><span>Start collecting immediately</span></button>
+            <button type="button" class="runmode ${sched.mode==='daily'?'on':''}" data-mode="daily">
+              <b>Schedule daily</b><span>First run at a set time, then every morning</span></button>
+          </div>
+          <div class="sched-when" style="display:${sched.mode==='daily'?'block':'none'}">
+            <div class="field"><label>Run time</label>
+              <input type="time" id="f_runat" value="${sched.time}">
+              <p class="hint">First run <b id="firstRun"></b>. Leads land in your inbox at this time each day.
+                Nothing is collected — and no credits spent — until the first run.</p>
+            </div>
+          </div>
+        </div>
+      </section>` : ''}
 
       <div class="submit">
         ${lastError ? `<div class="err">${esc(lastError)}</div>` : ''}
@@ -247,7 +269,32 @@ function bind(){
   on('f_name','name'); on('f_profile','profile_url'); on('f_pub','publication');
   on('f_freq','frequency'); on('f_time','time_frame'); on('f_ctype','content_type');
   on('f_sort','linkedin_sort_by'); on('f_max','max_results');
+
+  $$('.runmode').forEach(b => b.addEventListener('click', () => {
+    sched.mode = b.dataset.mode;
+    $$('.runmode').forEach(x => x.classList.toggle('on', x === b));
+    const when = document.querySelector('.sched-when');
+    if (when) when.style.display = sched.mode === 'daily' ? 'block' : 'none';
+    updateFirstRun(); paint();
+  }));
+  $('#f_runat')?.addEventListener('input', e => { sched.time = e.target.value || '09:00'; updateFirstRun(); });
+  updateFirstRun();
+
   $('#create')?.addEventListener('click', create);
+}
+
+/* friendly "today/tomorrow at 9:00 AM" for the scheduled first run */
+function updateFirstRun(){
+  const el = $('#firstRun'); if (!el) return;
+  const iso = nextOccurrence(sched.time || '09:00');
+  const d = new Date(iso);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const day = new Date(d); day.setHours(0,0,0,0);
+  const rel = day.getTime() === today.getTime() ? 'today'
+    : day.getTime() === today.getTime() + 86400000 ? 'tomorrow'
+    : d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+  el.textContent = `${rel} at ${time}`;
 }
 
 const tagCls = k => k==='keywords_and'?'and' : k==='keywords_not'?'not' : 'who';
@@ -276,11 +323,12 @@ function paint(){
     : `1 credit to create, plus 1 for every result collected. Set a maximum to cap it.`;
   const btn = $('#create');
   if (btn){ btn.disabled = !ready;
-    btn.textContent = ready ? 'Create ICP'
+    btn.textContent = ready ? (sched.mode === 'daily' && currentOffer ? 'Schedule ICP' : 'Create ICP')
       : t.mode === 'keywords' ? 'Add at least one keyword' : 'Fill in the field above'; }
 }
 
 async function create(){
+  if (sched.mode === 'daily' && currentOffer) return scheduleIcp();
   const btn = $('#create');
   btn.disabled = true; btn.textContent = 'Creating…';
   lastError = null;
@@ -290,7 +338,7 @@ async function create(){
     const back = currentOffer;
     if (back && id) await attachSearch(back, id);
     toast('ICP created');
-    s = blank();
+    s = blank(); sched = { mode:'now', time:'09:00' };
     await loadSearches(); loadCredits();
     back ? go('offer', back) : go('list');
   } else {
@@ -298,6 +346,36 @@ async function create(){
     lastError = issues ? issues.map(i => i.message).join('\n')
                        : (body?.error?.message || body?.message || 'Request failed');
     toast('Not created', true); renderBuild();
+  }
+}
+
+/* Schedule the ICP instead of creating it now: store the Trigify payload + a
+   daily time. The server's scheduler creates it and runs analysis at that time. */
+async function scheduleIcp(){
+  const btn = $('#create'); btn.disabled = true; btn.textContent = 'Scheduling…';
+  const off = offerById(currentOffer);
+  const rec = {
+    id: 'sch_' + Math.random().toString(36).slice(2, 10),
+    offerId: currentOffer,
+    offerName: off?.name || '',
+    name: s.name || 'Untitled ICP',
+    payload: buildPayload(s),
+    timeOfDay: sched.time,
+    nextRun: nextOccurrence(sched.time),
+    searchId: null,
+    status: 'scheduled',
+    createdAt: new Date().toISOString(),
+    lastRunAt: null,
+    lastError: null
+  };
+  const ok = await addSchedule(rec);
+  if (ok){
+    toast('ICP scheduled');
+    s = blank(); sched = { mode:'now', time:'09:00' };
+    go('offer', currentOffer);
+  } else {
+    toast('Could not schedule', true);
+    btn.disabled = false; paint();
   }
 }
 

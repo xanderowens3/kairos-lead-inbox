@@ -6,6 +6,34 @@ import { blankOffer, loadOffers, offers, offerById, upsertOffer, removeOffer,
 import { TYPES } from './schema.js';
 import { analyzeOffer } from './leads.js';
 import { confirmDialog } from './modal.js';
+import { loadSchedules, schedulesForOffer, cancelSchedule } from './schedules.js';
+
+/* friendly "today/tomorrow at 9:00 AM", else "Mon, Jul 28 at 9:00 AM" */
+const fmtWhen = iso => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const day = new Date(d); day.setHours(0,0,0,0);
+  const t0 = new Date(); t0.setHours(0,0,0,0);
+  const rel = day.getTime() === t0.getTime() ? 'today'
+    : day.getTime() === t0.getTime() + 86400000 ? 'tomorrow'
+    : d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+  return `${rel} at ${d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' })}`;
+};
+const clockSvg = `<svg viewBox="0 0 24 24" class="sched-ic"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
+
+function scheduledCardHTML(sc){
+  return `<div class="sched-card">
+    <div class="sched-l">
+      ${clockSvg}
+      <div>
+        <div class="sched-name">${esc(sc.name || 'Untitled ICP')}</div>
+        <div class="sched-sub">Scheduled — first run <b>${fmtWhen(sc.nextRun)}</b>, then daily${sc.timeOfDay?` at ${sc.timeOfDay}`:''}. Not collecting yet.</div>
+        ${sc.lastError ? `<div class="sched-err">Last attempt failed: ${esc(sc.lastError)} — retrying.</div>` : ''}
+      </div>
+    </div>
+    <button class="sched-cancel" data-cancel="${sc.id}">Cancel</button>
+  </div>`;
+}
 
 const $  = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -113,6 +141,8 @@ export async function renderOffer(id){
     .map(sid => ctx.searches.find(s => s.id === sid))
     .filter(Boolean);
   await ctx.ensureIcpData(mine.map(s => s.id));   // accurate post counts + instant expand
+  await loadSchedules();
+  const pending = schedulesForOffer(id).filter(s => !s.searchId);   // not yet created in Trigify
   const missing = (o.searchIds || []).length - mine.length;
   const r = readiness(o);
   const bullets = (arr, neg, pos) => (arr||[]).filter(Boolean).length
@@ -176,6 +206,7 @@ export async function renderOffer(id){
         <span><b>New ICP</b><span class="add-icp-sub">A listening search for this offer</span></span>
       </button>
 
+      ${pending.map(scheduledCardHTML).join('')}
       ${mine.map(s => ctx.rowHTML(s)).join('')}
       ${missing ? `<div class="none-box warnbox">${missing} ICP${missing===1?' was':'s were'}
         deleted in Trigify and no longer exist${missing===1?'s':''}.
@@ -186,6 +217,17 @@ export async function renderOffer(id){
   $('#edit').addEventListener('click', () => { draft = structuredClone(o); renderEditor(); });
   $('#newIcp').addEventListener('click', () => ctx.go('build', o.id));
   $('#analyze')?.addEventListener('click', () => runAnalysis(o, id));
+  $$('[data-cancel]').forEach(b => b.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: 'Cancel this scheduled ICP?',
+      body: 'It will not be created or run. You can schedule it again later.',
+      confirm: 'Cancel it', danger: true
+    });
+    if (!ok) return;
+    await cancelSchedule(b.dataset.cancel);
+    ctx.toast('Schedule cancelled');
+    renderOffer(id);
+  }));
   $('#tidy')?.addEventListener('click', async () => {
     const live = new Set(ctx.searches.map(s => s.id));
     o.searchIds = (o.searchIds||[]).filter(x => live.has(x));

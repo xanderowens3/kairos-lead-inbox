@@ -11,6 +11,7 @@ out/
 # runtime state with third-party PII / regenerable caches
 data/leads.json
 data/profiles.json
+data/schedules.json
 
 # local dev artifacts, not part of the deployable app
 _archive/

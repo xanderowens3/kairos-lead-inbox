@@ -591,6 +591,32 @@ textarea::placeholder{color:var(--faint)}
 .verd.done{background:#EEF1F6;color:var(--muted);font-weight:700;text-transform:uppercase;
   font-size:9px;letter-spacing:.06em;padding:2px 7px}
 
+/* ─────────── ICP RUN SCHEDULING ─────────── */
+.runmodes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.runmode{display:flex;flex-direction:column;gap:3px;text-align:left;padding:14px 16px;
+  border:1.5px solid var(--line);border-radius:11px;background:var(--surface);cursor:pointer;
+  transition:.14s}
+.runmode:hover{border-color:#AEC2E4}
+.runmode.on{border-color:var(--blue);background:var(--blue-tint);box-shadow:0 0 0 3px var(--blue-glow)}
+.runmode b{font-size:14px;color:var(--ink);font-weight:700}
+.runmode span{font-size:11.5px;color:var(--muted);line-height:1.35}
+.sched-when input[type=time]{font-family:var(--sans);font-size:14px}
+
+.sched-card{display:flex;align-items:center;gap:14px;justify-content:space-between;
+  background:var(--surface);border:1px dashed #B9C6DC;border-radius:12px;
+  padding:15px 17px;margin-bottom:11px}
+.sched-l{display:flex;align-items:flex-start;gap:12px;min-width:0}
+.sched-ic{width:26px;height:26px;flex-shrink:0;stroke:var(--blue);fill:none;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round;margin-top:1px}
+.sched-name{font-family:var(--serif);font-size:16px;font-weight:700;color:var(--ink)}
+.sched-sub{font-size:12px;color:var(--muted);line-height:1.45;margin-top:2px}
+.sched-sub b{color:var(--ink);font-weight:600}
+.sched-err{font-size:11.5px;color:var(--red);margin-top:4px}
+.sched-cancel{flex-shrink:0;font-family:var(--sans);font-size:12.5px;font-weight:600;
+  color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:9px;
+  padding:8px 14px;cursor:pointer;transition:.14s}
+.sched-cancel:hover{border-color:#E0665A;color:#D64535;background:#FDECEA}
+
 /* ─────────── CONFIRM MODAL ─────────── */
 .modal-wrap{position:fixed;inset:0;z-index:100;display:grid;place-items:center;
   background:rgba(20,28,44,.34);backdrop-filter:blur(2px);opacity:0;transition:opacity .16s;
