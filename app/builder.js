@@ -8,7 +8,7 @@ import { loadOffers, offers, offerById, attachSearch, detachSearch,
 import { addSchedule, loadSchedules, allSchedules, cancelSchedule } from './schedules.js';
 import { initOffers, renderOffers, renderOffer, scheduleStripHTML } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads, openLeadDrawer } from './views-leads.js';
-import { loadLeads, countInbox, leadsForIcp, isRecommended, leadById } from './leads.js';
+import { loadLeads, countInbox, allLeads, isRecommended, leadById } from './leads.js';
 import { confirmDialog } from './modal.js';
 
 const $  = s => document.querySelector(s);
@@ -620,8 +620,11 @@ async function openIcp(id, view, refresh){
 function resultsHTML(rows, query, icpId){
   const off = offerForSearch(icpId);
   const thr = thresholdFor(icpId);
+  /* Scores are keyed by POST, not by ICP. A post is scored once per offer (the
+     offer is the judging context), so if two ICPs collect the same post the
+     second must show the existing score rather than reporting it unscored. */
   const byPost = {};
-  leadsForIcp(icpId).forEach(l => { byPost[l.postId] = l; });
+  allLeads().forEach(l => { if (!off || l.offerId === off.id) byPost[l.postId] = l; });
 
   const scored   = rows.filter(r => byPost[r.id]).sort((a,b) => byPost[b.id].score - byPost[a.id].score);
   const unscored = rows.filter(r => !byPost[r.id]);
