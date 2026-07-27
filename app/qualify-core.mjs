@@ -11,7 +11,11 @@
    ========================================================================== */
 
 export const MODEL = 'claude-sonnet-5';    // stronger judgment; thinking disabled to control cost
-export const BATCH = 8;
+/* One post per call: scores stay on the absolute rubric rather than drifting
+   into a relative ranking of batch-mates, verdicts can't be mismatched to the
+   wrong post, and a failure costs one post. CONCURRENCY keeps it fast. */
+export const BATCH = 1;
+export const CONCURRENCY = 5;
 
 const list = a => (a || []).filter(Boolean).map(x => '- ' + x).join('\n') || '- (none given)';
 

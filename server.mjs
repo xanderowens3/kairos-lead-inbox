@@ -13,7 +13,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { extname, join, normalize, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
-import { judgeBatch, BATCH, MODEL } from './app/qualify-core.mjs';
+import { judgeBatch, CONCURRENCY, MODEL } from './app/qualify-core.mjs';
 import { passesExclusions } from './app/schema.js';
 import { initDb, usingDb, getOffers, saveOffers, getLeads, saveLeads,
          getProfiles, saveProfiles, getSchedules, saveSchedules } from './db.mjs';
@@ -179,67 +179,76 @@ async function analyzeOffer(offerId, maxPosts){
   /* feedback the user has given on this offer's past leads */
   const feedback = buildFeedback(leadsStore, offerId);
 
-  let inTok = 0, outTok = 0, cacheRead = 0, recommended = 0, enriched = 0, failedBatches = 0;
+  let inTok = 0, outTok = 0, cacheRead = 0, recommended = 0, enriched = 0, failedPosts = 0;
   const now = new Date().toISOString();
   const creditsBefore = (await tg('/usage'))?.data?.credits?.total_consumed ?? 0;
 
-  for (let i = 0; i < toScore.length; i += BATCH){
-    const batch = toScore.slice(i, i + BATCH);
-    // enrich this batch's authors in parallel, attach to each post for scoring
-    await Promise.all(batch.map(async p => {
-      p.profile = await enrichProfile(p.author?.profile_url);
-      if (p.profile) enriched++;
-    }));
+  /* Score ONE post per call. Judging posts individually keeps each score on the
+     absolute rubric instead of drifting into a relative ranking of whatever else
+     happened to share the batch — which matters because the inbox threshold
+     assumes a stable scale. It also means a bad post can only cost itself. */
+  const scoreOne = async p => {
+    p.profile = await enrichProfile(p.author?.profile_url);
+    if (p.profile) enriched++;
 
-    // one bad batch must not lose the whole run — log it and keep going
     let verdicts, usage;
     try {
-      ({ verdicts, usage } = await judgeBatch(anthropic, offer, batch, feedback));
+      ({ verdicts, usage } = await judgeBatch(anthropic, offer, [p], feedback));
     } catch (e) {
-      failedBatches++;
-      console.log(`  batch ${1 + i / BATCH} failed, skipping: ${e.message}`);
-      continue;
+      failedPosts++;
+      console.log(`  post ${p.id} failed, skipping: ${e.message}`);
+      return;
     }
     inTok += usage.input_tokens; outTok += usage.output_tokens;
     cacheRead += usage.cache_read_input_tokens || 0;
-    const byId = Object.fromEntries(batch.map(p => [p.id, p]));
-    for (const v of verdicts){
-      const p = byId[v.id]; if (!p) continue;
-      const pr = p.profile || {};
-      const recommend = v.score >= thresholdFor(offer, p.icpId);   // inbox = at/above the ICP threshold
-      leadsStore.push({
-        id: 'lead_' + v.id,
-        postId: v.id,
-        offerId, offerName: offer.name,
-        icpId: p.icpId, icpName: p.icpName,
-        recommend,
-        score: v.score, icpFit: v.icp_fit,
-        reason: v.reason, evidence: v.evidence,
-        author: p.author?.name, profileUrl: p.author?.profile_url,
-        jobTitle: pr.jobTitle ?? null, company: pr.company ?? null,
-        industry: pr.industry ?? null, followers: pr.followers ?? null,
-        location: pr.location ?? null, summary: pr.summary ?? null,
-        postUrl: p.content?.url, text: p.content?.text,
-        publishedAt: p.published_at,
-        analyzedAt: now, model: MODEL,
-        rating: null, ratingNote: null, userScore: null,
-        promoted: false, golden: false
-      });
-      if (recommend) recommended++;
-    }
-  }
+
+    const v = verdicts[0];
+    if (!v){ failedPosts++; return; }
+    const pr = p.profile || {};
+    const recommend = v.score >= thresholdFor(offer, p.icpId);   // inbox = at/above the ICP threshold
+    leadsStore.push({
+      id: 'lead_' + p.id,
+      postId: p.id,
+      offerId, offerName: offer.name,
+      icpId: p.icpId, icpName: p.icpName,
+      recommend,
+      score: v.score, icpFit: v.icp_fit,
+      reason: v.reason, evidence: v.evidence,
+      author: p.author?.name, profileUrl: p.author?.profile_url,
+      jobTitle: pr.jobTitle ?? null, company: pr.company ?? null,
+      industry: pr.industry ?? null, followers: pr.followers ?? null,
+      location: pr.location ?? null, summary: pr.summary ?? null,
+      postUrl: p.content?.url, text: p.content?.text,
+      publishedAt: p.published_at,
+      analyzedAt: now, model: MODEL,
+      rating: null, ratingNote: null, userScore: null,
+      promoted: false, golden: false
+    });
+    if (recommend) recommended++;
+  };
+
+  // Warm the prompt cache on the first post alone — otherwise the initial
+  // concurrent calls would all miss and each pay to write the same cache entry.
+  await scoreOne(toScore[0]);
+  const rest = toScore.slice(1);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, rest.length) }, async () => {
+      while (next < rest.length) await scoreOne(rest[next++]);
+    })
+  );
   const kept = pruneOldLeads(leadsStore, offer);
   await saveLeads(kept);
   if (profileCache) await saveProfiles(profileCache);
   const creditsAfter = (await tg('/usage'))?.data?.credits?.total_consumed ?? creditsBefore;
   const enrichCredits = creditsAfter - creditsBefore;
   const cost = priceOf(inTok, outTok);
-  const analyzed = toScore.length - failedBatches * BATCH;
+  const analyzed = toScore.length - failedPosts;
   console.log(`  analyzed ${analyzed} → ${recommended} recommended · ${enriched} enriched`
-    + (failedBatches ? ` · ${failedBatches} batch(es) failed` : '')
+    + (failedPosts ? ` · ${failedPosts} post(s) failed` : '')
     + ` · ~$${cost.toFixed(3)} Claude · ${enrichCredits} Trigify credits (${cacheRead} cached tokens)`);
   return { analyzed: Math.max(0, analyzed), recommended, enriched,
-           remaining: fresh.length - toScore.length, failedBatches,
+           remaining: fresh.length - toScore.length, failedPosts,
            cost: +cost.toFixed(4), enrichCredits, cacheRead };
 }
 

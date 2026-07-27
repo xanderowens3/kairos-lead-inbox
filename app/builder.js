@@ -590,7 +590,7 @@ export function bindRows(refreshView){
     b.disabled = false; b.textContent = label;
     if (r.error) return toast(r.error, true);
     toast(`${r.analyzed} analyzed · ${r.recommended} to inbox`
-      + (r.failedBatches ? ` · ${r.failedBatches} batch(es) failed` : ''));
+      + (r.failedPosts ? ` · ${r.failedPosts} post(s) failed` : ''));
     await loadLeads(); syncInboxCount(); refresh();
   }));
 
