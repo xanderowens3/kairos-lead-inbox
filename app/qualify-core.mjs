@@ -1,0 +1,138 @@
+/* ==========================================================================
+   Qualification core — the prompt + schema + Claude call that scores a post
+   against an offer. Shared by the server's /analyze endpoint and the CLI
+   script so they can never drift.
+
+   Scoring: 0–100, driven by the offer context. Disqualifiers are a hard reject;
+   ICP qualifiers push the score up. No numeric threshold — the model makes a
+   binary `recommend` call (worth pursuing or not) and the score ranks the
+   recommended ones. Feedback examples the user has rated are injected as
+   few-shot guidance so the agent aligns to their actual judgment over time.
+   ========================================================================== */
+
+export const MODEL = 'claude-sonnet-5';    // stronger judgment; thinking disabled to control cost
+export const BATCH = 8;
+
+const list = a => (a || []).filter(Boolean).map(x => '- ' + x).join('\n') || '- (none given)';
+export const clean = t => (t || '').replace(/\s+/g, ' ').trim().slice(0, 900);
+
+/* The context the agent reads. Stable across every post in a run, so it is
+   marked cacheable by the caller (≈0.1× price on cache reads). */
+export function buildSystem(offer, feedback = []){
+  const fb = feedback.filter(f => f.text && (f.rating || f.userScore != null));
+  const fbBlock = fb.length ? `
+
+HOW THIS USER HAS RATED PAST LEADS
+Learn from these — they are the user's own verdicts and matter more than the
+general rules above. Where a user score is given, calibrate to it: a post like
+one the user called a 75 should score near 75, and similar posts nearby. Weight
+disagreements especially — where you would have scored differently, move toward
+the user.
+${fb.map(f => {
+  const tag = [
+    f.rating === 'good' ? 'GOOD LEAD' : f.rating === 'bad' ? 'NOT A FIT' : null,
+    f.userScore != null ? `user would score it ${f.userScore}` : null,
+    f.note || null
+  ].filter(Boolean).join(' — ');
+  return `\n[${tag}]\n${clean(f.text)}`;
+}).join('\n')}` : '';
+
+  return `You screen social-media posts to find people worth approaching about a specific offer.
+
+THE OFFER
+${offer.sell || '(not described)'}
+
+WHO IT IS FOR
+${offer.icpText || '(not described)'}
+
+You give each post a single score from 0 to 100 for how worth-approaching the author is.
+Treat it as a weighted judgment, NOT a checklist. Start from how well the post fits the
+offer — does this person plausibly have a reason to want what is being sold? Then let the
+factors below push the score up or down. No single factor decides the outcome; they tip
+the scale.
+
+SIGNS OF A PROBLEM THE OFFER SOLVES (raise the score when present)
+${list(offer.pains)}
+
+QUALIFIERS — each nudges the score UP; the more that apply, the higher
+${list(offer.qualifiers)}
+
+DISQUALIFIERS — each nudges the score DOWN. These are penalties, not vetoes: a post
+can still be a good lead despite one of them if the other signals are strong.
+${list(offer.disqualifiers)}
+${offer.goodExample ? `\nAN EXAMPLE OF A STRONG FIT\n${clean(offer.goodExample)}\n` : ''}${offer.badExample ? `\nAN EXAMPLE THAT LOOKS CLOSE BUT IS WEAK\n${clean(offer.badExample)}\n` : ''}
+HOW TO JUDGE
+Weigh everything into one 0–100 score. A company that fits who this is for and shows a
+reason to want outbound help scores high; each qualifier it meets lifts it further; each
+disqualifier lowers it but never eliminates it on its own. Someone hiring an SDR or BDR is
+an adjacent buyer — they want outbound and are weighing doing it in-house — so if that is
+listed as a qualifier, treat it as a real positive, not noise.
+
+Only score very low (and do not recommend) the posts that clearly aren't a person with a
+business reason to care: job-board listings, students, certification announcements, pure
+self-promotion of an unrelated product, news commentary, or a direct competitor selling
+the identical service. Everything with a plausible business behind it gets placed on the
+spectrum rather than thrown out.
+
+For most posts you also get the author's LinkedIn PROFILE — job title, company, industry,
+follower count, location, and a summary. Use it. This is often where the qualifiers and
+disqualifiers actually show up: whether they clear a follower threshold, what country they
+are in, whether their company is in marketing / AI / automation, whether they are a
+decision-maker. A weak-looking post from a strong profile can still be a strong lead, and
+vice versa — weigh both. When no profile is given, judge on the post alone, lean on
+icp_fit "unknown", and do not invent details you were not shown.
+
+score: 0–100, the weighted judgment above. Rank by it.
+recommend: true if, on balance, this is plausibly worth the user putting eyes on.
+evidence: the exact phrase showing the fit or the problem, or null.
+reason: one or two plain sentences on the balance of factors — what lifted it and what
+pulled it down.${fbBlock}`;
+}
+
+export const SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['verdicts'],
+  properties: { verdicts: { type: 'array', items: {
+    type: 'object', additionalProperties: false,
+    required: ['id', 'recommend', 'score', 'icp_fit', 'evidence', 'reason'],
+    properties: {
+      id: { type: 'string' },
+      recommend: { type: 'boolean' },
+      score: { type: 'integer' },
+      icp_fit: { type: 'string', enum: ['clear', 'likely', 'unknown', 'no'] },
+      evidence: { type: ['string', 'null'] },
+      reason: { type: 'string' }
+    } } } }
+};
+
+/* Render the enriched profile (attached as p.profile by the caller) for the prompt. */
+function profileLine(pr){
+  if (!pr) return 'profile: (could not be retrieved — judge on the post alone)';
+  const bits = [
+    pr.jobTitle && `${pr.jobTitle}`,
+    pr.company && `at ${pr.company}`,
+    pr.industry && `· industry: ${pr.industry}`,
+    pr.followers != null && `· ${pr.followers} followers`,
+    pr.location && `· location: ${pr.location}`
+  ].filter(Boolean).join(' ');
+  return `profile: ${bits || '(sparse)'}${pr.summary ? `\nprofile summary: ${clean(pr.summary)}` : ''}`;
+}
+
+/* Judge one batch of posts. `client` is an Anthropic SDK instance.
+   Each post may carry an enriched `.profile` object (see server /profile/enrich). */
+export async function judgeBatch(client, offer, posts, feedback = []){
+  const payload = posts.map(p =>
+    `<post id="${p.id}">\nauthor: ${p.author?.name ?? 'unknown'}\n${profileLine(p.profile)}\ntext: ${clean(p.content?.text)}\n</post>`
+  ).join('\n\n');
+
+  const res = await client.messages.create({
+    model: MODEL,
+    max_tokens: 4000,
+    thinking: { type: 'disabled' },   // scoring is single-step; keep output tokens (and cost) down
+    system: [{ type: 'text', text: buildSystem(offer, feedback), cache_control: { type: 'ephemeral' } }],
+    output_config: { format: { type: 'json_schema', schema: SCHEMA } },
+    messages: [{ role: 'user', content: `Judge each post. One verdict per post id.\n\n${payload}` }]
+  });
+
+  const text = res.content.find(b => b.type === 'text')?.text ?? '{"verdicts":[]}';
+  return { verdicts: JSON.parse(text).verdicts ?? [], usage: res.usage };
+}

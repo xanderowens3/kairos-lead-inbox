@@ -1,0 +1,19 @@
+{
+  "name": "kairos-lead-inbox",
+  "version": "1.0.0",
+  "description": "Kairos — an AI agent that turns Trigify social listening into a qualified lead inbox.",
+  "main": "server.mjs",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0"
+  }
+}

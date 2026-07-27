@@ -1,0 +1,19 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# deps & build
+node_modules/
+out/
+*.log
+
+# runtime state with third-party PII / regenerable caches
+data/leads.json
+data/profiles.json
+
+# local dev artifacts, not part of the deployable app
+_archive/
+prototype/
+Branding/
+offer.json

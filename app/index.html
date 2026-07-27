@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kairos — Search Builder</title>
+<link rel="icon" href="icons/mark.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,500;1,600;1,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app">
+  <aside class="rail">
+    <div class="brand">
+      <img src="icons/mark.svg" alt="">
+      <div class="name">KAIROS</div>
+    </div>
+    <div class="tagline">The opportune moment</div>
+
+    <div class="rail-label">Leads</div>
+    <nav class="nav">
+      <a href="#" data-view="inbox" class="on">
+        <img class="ico" src="icons/torch.svg" alt=""><span>Inbox</span>
+        <span class="dot" id="inboxCnt"></span></a>
+      <a href="#" data-view="leads">
+        <img class="ico" src="icons/wreath.svg" alt=""><span>All leads</span></a>
+    </nav>
+
+    <div class="rail-label">Setup</div>
+    <nav class="nav">
+      <a href="#" data-view="offers">
+        <img class="ico" src="icons/column.svg" alt=""><span>Offers</span></a>
+      <a href="#" data-view="list">
+        <img class="ico" src="icons/list.svg" alt=""><span>All ICPs</span>
+        <span class="dot" id="cnt">–</span></a>
+    </nav>
+
+    <div class="rail-art"><img src="icons/hourglass.svg" alt=""></div>
+
+    <div class="rail-foot">
+      <span class="pulse"></span> Connected to Trigify
+      <span class="cred" id="credits"></span>
+    </div>
+  </aside>
+
+  <main class="main" id="main"></main>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<script type="module" src="builder.js"></script>
+</body>
+</html>

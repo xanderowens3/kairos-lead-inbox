@@ -1,0 +1,29 @@
+[
+  {
+    "id": "off_eevs3ebd",
+    "name": "Cold Email Agency Services",
+    "sell": "We sell a fully done for you cold email service which is enhanced by the power of three core AI systems:\n-Our own lead generation software and database, so our customers can gain access to leads their competitors don't\n-A speed to lead reply agent which takes interested leads and books them into our clients calendar automatically, to ensure no lead slips through the cracks\n-A large scale data analysis system which allows us to make data backed decisions to enhance results",
+    "icpText": "We are in the beginning phases of our company right now so we are open to different types of industries, but we are mainly targeting digital marketing agencies, AI automation agencies and AI companies which have some sort of unique mechanism to help companies make more money",
+    "pains": [
+      "Wasted time and money spent running outbound yourself",
+      "Exclusive AI systems which competitors don't have access to"
+    ],
+    "disqualifiers": [
+      "Cold email or GTM agencies selling their services",
+      "They are from India, Pakistan or any other third world country which doesn't have a strong currency"
+    ],
+    "goodExample": "https://www.linkedin.com/feed/update/urn:li:activity:7485029910613237760/",
+    "badExample": "",
+    "searchIds": [
+      "2c0fdac8-00fc-4242-9c6a-908f5f32ca70",
+      "d502d44c-9fdb-4499-a1ff-ee562254218f"
+    ],
+    "createdAt": "2026-07-26T09:21:09.340Z",
+    "qualifiers": [
+      "They have more than 10 000 followers",
+      "They are based in the US or EU",
+      "They mention that their company has something to with marketing, AI or automation services",
+      "They mention they're looking for SDRs or BDRs (adjacent to our services)"
+    ]
+  }
+]
