@@ -3,11 +3,12 @@
    ========================================================================== */
 import { TYPES, PLATFORMS, ICONS, FREQUENCY, TIME_FRAME, LI_SORT, LI_CONTENT,
          buildPayload, blank, verifyResults } from './schema.js';
-import { loadOffers, offerById, attachSearch } from './offers.js';
+import { loadOffers, offerById, attachSearch, thresholdFor, setThreshold, offerForSearch } from './offers.js';
 import { addSchedule } from './schedules.js';
 import { initOffers, renderOffers, renderOffer } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads } from './views-leads.js';
-import { loadLeads, countInbox } from './leads.js';
+import { loadLeads, countInbox, leadsForIcp, isRecommended,
+         promoteLead, pinGolden, rateLead, leadById } from './leads.js';
 import { confirmDialog } from './modal.js';
 
 const $  = s => document.querySelector(s);
@@ -481,10 +482,12 @@ export function rowHTML(row){
     ${open ? `<div class="icp-body">
       <div class="icp-tabs">
         <button class="itab ${view==='results'?'on':''}" data-tab="results" data-id="${x.id}">Results</button>
+        <button class="itab ${view==='review'?'on':''}" data-tab="review" data-id="${x.id}">Review &amp; rank</button>
         <button class="itab ${view==='config'?'on':''}" data-tab="config" data-id="${x.id}">Configuration</button>
         ${view==='results' && results[x.id] ? `<button class="linkbtn icp-refresh" data-refresh="${x.id}">↻ Refresh</button>` : ''}
       </div>
       ${view === 'config' ? configHTML(x)
+        : view === 'review' ? reviewHTML(x.id)
         : icpLoading[x.id] ? `<div class="res-loading">Loading results…</div>`
         : results[x.id] ? resultsHTML(results[x.id], q)
         : `<div class="res-empty">No results loaded.</div>`}
@@ -523,6 +526,53 @@ function configHTML(x){
   </div>`;
 }
 
+/* Review & rank: every post scored for this ICP, ranked, with the inbox line
+   drawn at the ICP's threshold. Rate, promote below-threshold posts, pin golden. */
+function reviewHTML(icpId){
+  const leads = leadsForIcp(icpId);                 // score desc
+  const thr = thresholdFor(icpId);
+  const attached = !!offerForSearch(icpId);
+  if (!attached) return `<div class="res-empty">This ICP isn't attached to an offer, so its posts aren't scored.</div>`;
+  if (!leads.length) return `<div class="res-empty">No posts scored yet. Run analysis on the offer to fill the review queue.</div>`;
+  const inInbox = leads.filter(isRecommended).length;
+  return `<div class="rev">
+    <div class="rev-thr">
+      <div class="rev-thr-txt">
+        <label>Inbox threshold</label>
+        <p>Posts scoring <b class="thr-val" data-thrval="${icpId}">${thr}</b> or above go to the inbox
+          &middot; <b>${inInbox}</b> of ${leads.length} qualify now.</p>
+      </div>
+      <input type="range" min="0" max="100" step="5" value="${thr}" class="rev-slider" data-thr="${icpId}">
+    </div>
+    <div class="rev-list">${leads.map(l => reviewRowHTML(l, thr)).join('')}</div>
+  </div>`;
+}
+
+function reviewRowHTML(l, thr){
+  const rec = isRecommended(l);
+  const status = rec ? (l.promoted && l.score < thr ? 'promoted in' : 'in inbox') : 'below line';
+  const promoteBtn = l.promoted
+    ? `<button class="rev-btn on" data-promote="${l.id}">Promoted</button>`
+    : (l.score < thr ? `<button class="rev-btn" data-promote="${l.id}">Promote</button>` : '');
+  return `<div class="rev-row ${rec?'in':'out'}">
+    <div class="rev-score ${rec?'in':''}">${l.score}</div>
+    <div class="rev-main">
+      <div class="rev-head">
+        <span class="rev-name">${esc(l.author || 'Unknown')}</span>
+        ${l.golden ? `<span class="rev-gold">★</span>` : ''}
+        <span class="rev-status">${status}</span>
+      </div>
+      <div class="rev-reason">${esc(l.reason || '')}</div>
+    </div>
+    <div class="rev-acts">
+      ${promoteBtn}
+      <button class="rev-ic good ${l.rating==='good'?'on':''}" data-rate="good" data-rlead="${l.id}" title="Good fit">✓</button>
+      <button class="rev-ic bad ${l.rating==='bad'?'on':''}" data-rate="bad" data-rlead="${l.id}" title="Not a fit">✕</button>
+      <button class="rev-ic gold ${l.golden?'on':''}" data-gold="${l.id}" title="Pin as a permanent example">★</button>
+    </div>
+  </div>`;
+}
+
 export function bindRows(refreshView){
   // In-place row actions rebuild the view; keep the reader where they were
   // instead of snapping back to the top.
@@ -552,6 +602,39 @@ export function bindRows(refreshView){
   $$('[data-exp]').forEach(x => x.addEventListener('click', () => {
     expanded[x.dataset.exp] = !expanded[x.dataset.exp]; refresh();
   }));
+
+  // review & rank actions
+  $$('[data-thr]').forEach(sl => {
+    sl.addEventListener('input', () => {
+      const lbl = document.querySelector(`[data-thrval="${sl.dataset.thr}"]`);
+      if (lbl) lbl.textContent = sl.value;
+    });
+    sl.addEventListener('change', async () => {
+      await setThreshold(sl.dataset.thr, Number(sl.value));
+      refresh();
+    });
+  });
+  $$('[data-promote]').forEach(b => b.addEventListener('click', async e => {
+    e.stopPropagation();
+    const l = leadById(b.dataset.promote);
+    await promoteLead(b.dataset.promote, !l?.promoted);
+    toast(l?.promoted ? 'Removed from inbox' : 'Promoted to inbox');
+    refreshInboxCount(); refresh();
+  }));
+  $$('[data-rate][data-rlead]').forEach(b => b.addEventListener('click', async e => {
+    e.stopPropagation();
+    const l = leadById(b.dataset.rlead);
+    const next = l?.rating === b.dataset.rate ? null : b.dataset.rate;
+    await rateLead(b.dataset.rlead, next, l?.ratingNote, l?.userScore);
+    refresh();
+  }));
+  $$('[data-gold]').forEach(b => b.addEventListener('click', async e => {
+    e.stopPropagation();
+    const l = leadById(b.dataset.gold);
+    await pinGolden(b.dataset.gold, !l?.golden);
+    toast(l?.golden ? 'Unpinned' : 'Pinned as a permanent example');
+    refresh();
+  }));
 }
 
 async function openIcp(id, view, refresh){
@@ -559,6 +642,7 @@ async function openIcp(id, view, refresh){
   if (icpOpen[id] && (icpView[id] || 'results') === view){ icpOpen[id] = false; return refresh(); }
   icpOpen[id] = true;
   icpView[id] = view;
+  if (view === 'review') await loadLeads();          // review reads the leads store
   if (view === 'results' && !results[id]){
     icpLoading[id] = true; await refresh();
     const { ok, body } = await api(`/searches/${id}/results?limit=100`);

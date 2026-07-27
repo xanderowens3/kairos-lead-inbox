@@ -16,25 +16,38 @@ export const BATCH = 8;
 const list = a => (a || []).filter(Boolean).map(x => '- ' + x).join('\n') || '- (none given)';
 export const clean = t => (t || '').replace(/\s+/g, ' ').trim().slice(0, 900);
 
+/* one-line profile for a feedback example (mirrors how live posts show it) */
+function fbProfile(pr){
+  if (!pr) return '';
+  const bits = [pr.jobTitle, pr.company && `at ${pr.company}`, pr.industry, pr.location,
+    pr.followers != null ? `${pr.followers} followers` : null].filter(Boolean).join(' · ');
+  return bits ? `profile: ${bits}\n` : '';
+}
+
 /* The context the agent reads. Stable across every post in a run, so it is
    marked cacheable by the caller (≈0.1× price on cache reads). */
 export function buildSystem(offer, feedback = []){
-  const fb = feedback.filter(f => f.text && (f.rating || f.userScore != null));
+  const fb = feedback.filter(f => f.text && (f.rating || f.userScore != null || f.golden));
   const fbBlock = fb.length ? `
 
 HOW THIS USER HAS RATED PAST LEADS
 Learn from these — they are the user's own verdicts and matter more than the
 general rules above. Where a user score is given, calibrate to it: a post like
-one the user called a 75 should score near 75, and similar posts nearby. Weight
-disagreements especially — where you would have scored differently, move toward
-the user.
+one the user called a 75 should score near 75, and similar profiles nearby. Pay
+closest attention to DISAGREEMENTS (where the user's number differs from yours,
+or they promoted a post you scored low) — move toward the user on posts like
+those. The author's profile is shown; weigh it the same way you do when scoring.
 ${fb.map(f => {
   const tag = [
+    f.golden ? 'PINNED' : null,
     f.rating === 'good' ? 'GOOD LEAD' : f.rating === 'bad' ? 'NOT A FIT' : null,
     f.userScore != null ? `user would score it ${f.userScore}` : null,
+    (f.userScore != null && f.agentScore != null && Math.abs(f.userScore - f.agentScore) >= 15)
+      ? `you scored it ${f.agentScore}` : null,
+    f.promoted ? 'user pulled this into the inbox' : null,
     f.note || null
   ].filter(Boolean).join(' — ');
-  return `\n[${tag}]\n${clean(f.text)}`;
+  return `\n[${tag}]\n${fbProfile(f.profile)}${clean(f.text)}`;
 }).join('\n')}` : '';
 
   return `You screen social-media posts to find people worth approaching about a specific offer.

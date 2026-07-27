@@ -4,7 +4,19 @@
    all-time. Ranked by score. Feedback (rating) is saved back per lead.
    ========================================================================== */
 
+import { thresholdFor } from './offers.js';
+
 let cache = [];
+
+/* A lead lands in the inbox if the user promoted it, or its score clears the
+   ICP's threshold. Derived live so changing a threshold re-filters instantly. */
+export function isRecommended(l){
+  return !!l.promoted || l.score >= thresholdFor(l.icpId);
+}
+export function leadsForIcp(icpId){
+  return cache.filter(l => l.icpId === icpId)
+    .sort((a, b) => (b.score - a.score) || (new Date(b.analyzedAt) - new Date(a.analyzedAt)));
+}
 
 export async function loadLeads(){
   const r = await fetch('/data/leads');
@@ -25,7 +37,7 @@ async function persist(){
 
 /* Recommended leads, most recent first (tiebroken by score). */
 export function recommended(){
-  return cache.filter(l => l.recommend)
+  return cache.filter(isRecommended)
     .sort((a, b) => (new Date(b.analyzedAt) - new Date(a.analyzedAt)) || (b.score - a.score));
 }
 
@@ -43,6 +55,22 @@ export async function markContacted(id){
   if (!l) return false;
   l.contacted = true;
   l.contactedAt = new Date().toISOString();
+  return persist();
+}
+
+/* Promote a below-threshold lead into the inbox (or undo it). */
+export async function promoteLead(id, on = true){
+  const l = leadById(id);
+  if (!l) return false;
+  l.promoted = !!on;
+  return persist();
+}
+
+/* Pin a lead as a permanent feedback example that never ages out. */
+export async function pinGolden(id, on = true){
+  const l = leadById(id);
+  if (!l) return false;
+  l.golden = !!on;
   return persist();
 }
 

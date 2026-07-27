@@ -63,6 +63,23 @@ export async function detachSearch(offerId, searchId){
   return saveOffers([...cache]);
 }
 
+/* ---- per-ICP inbox threshold (score at/above which a lead is recommended) ---- */
+export const DEFAULT_MIN_SCORE = 50;
+
+export function offerForSearch(searchId){
+  return cache.find(o => (o.searchIds || []).includes(searchId));
+}
+export function thresholdFor(searchId){
+  const o = offerForSearch(searchId);
+  return o?.icpThresholds?.[searchId] ?? DEFAULT_MIN_SCORE;
+}
+export async function setThreshold(searchId, n){
+  const o = offerForSearch(searchId);
+  if (!o) return false;
+  o.icpThresholds = { ...(o.icpThresholds || {}), [searchId]: Math.max(0, Math.min(100, n)) };
+  return saveOffers([...cache]);
+}
+
 /* how complete is the context the agent will read? */
 export function readiness(o){
   const checks = [

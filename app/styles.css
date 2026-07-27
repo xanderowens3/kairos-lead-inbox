@@ -652,6 +652,47 @@ textarea::placeholder{color:var(--faint)}
 .strip-sep{color:var(--faint);margin:0 5px}
 .sched-strip .sched-err{color:var(--red)}
 
+/* ─────────── ICP REVIEW & RANK ─────────── */
+.rev{padding:4px 2px}
+.rev-thr{display:flex;align-items:center;gap:20px;justify-content:space-between;
+  background:var(--blue-tint);border:1px solid #C6D9F8;border-radius:11px;padding:13px 16px;margin-bottom:14px}
+.rev-thr-txt label{display:block;font-size:13px;font-weight:700;color:var(--ink)}
+.rev-thr-txt p{font-size:12px;color:var(--muted);margin-top:3px}
+.rev-thr-txt b{color:var(--ink);font-weight:700}
+.rev-slider{flex-shrink:0;width:180px;accent-color:var(--blue);cursor:pointer;box-shadow:none;
+  border:none;background:transparent;padding:0}
+.rev-slider:hover,.rev-slider:focus{border:none;box-shadow:none}
+
+.rev-list{display:flex;flex-direction:column}
+.rev-row{display:flex;align-items:center;gap:12px;padding:11px 6px;border-top:1px solid var(--line-soft)}
+.rev-row:first-child{border-top:none}
+.rev-row.out{opacity:.62}
+.rev-score{flex-shrink:0;width:38px;height:38px;border-radius:9px;display:flex;align-items:center;
+  justify-content:center;font-family:var(--serif);font-size:16px;font-weight:700;
+  font-variant-numeric:tabular-nums;background:#EEF1F6;color:var(--muted)}
+.rev-score.in{background:var(--blue-tint);color:var(--blue-deep)}
+.rev-main{flex:1;min-width:0}
+.rev-head{display:flex;align-items:center;gap:8px}
+.rev-name{font-family:var(--serif);font-size:14.5px;font-weight:700;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rev-gold{color:#C08A00;font-size:12px}
+.rev-status{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);background:#EEF1F6;padding:2px 6px;border-radius:5px;flex-shrink:0}
+.rev-row.in .rev-status{background:var(--green-bg);color:var(--green)}
+.rev-reason{font-size:12px;color:var(--muted);line-height:1.45;margin-top:3px;
+  display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.rev-acts{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.rev-btn{font-family:var(--sans);font-size:11.5px;font-weight:700;padding:6px 11px;border-radius:8px;
+  border:1.5px solid var(--blue);color:var(--blue);background:var(--surface);cursor:pointer;transition:.14s}
+.rev-btn:hover{background:var(--blue-tint)}
+.rev-btn.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+.rev-ic{width:30px;height:30px;border-radius:8px;border:1.5px solid var(--line);background:var(--surface);
+  cursor:pointer;font-size:13px;line-height:1;color:var(--muted);transition:.14s}
+.rev-ic.good.on{background:var(--green-bg);border-color:var(--green);color:var(--green)}
+.rev-ic.bad.on{background:var(--red-bg);border-color:var(--red);color:var(--red)}
+.rev-ic.gold.on{background:#FDF4DE;border-color:#E7C766;color:#C08A00}
+.rev-ic:hover{border-color:#AEC2E4}
+
 /* ─────────── CONFIRM MODAL ─────────── */
 .modal-wrap{position:fixed;inset:0;z-index:100;display:grid;place-items:center;
   background:rgba(20,28,44,.34);backdrop-filter:blur(2px);opacity:0;transition:opacity .16s;

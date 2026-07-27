@@ -97,6 +97,59 @@ async function enrichProfile(url){
   } catch { return null; }
 }
 
+const DEFAULT_MIN_SCORE = 50;               // inbox threshold when an ICP hasn't set one
+const thresholdFor = (offer, icpId) => offer.icpThresholds?.[icpId] ?? DEFAULT_MIN_SCORE;
+
+/* Curated feedback: pinned "golden" examples + the most instructive rated leads
+   (disagreements first, then a positive/negative contrast), newest first, with
+   the enriched profile attached so the model calibrates the way it scores. */
+function buildFeedback(leadsStore, offerId){
+  const rated = leadsStore
+    .filter(l => l.offerId === offerId && (l.golden || l.rating || l.userScore != null) && l.text)
+    .sort((a, b) => new Date(b.ratedAt || b.analyzedAt) - new Date(a.ratedAt || a.analyzedAt));
+
+  const agOf = l => l.agentScore ?? l.score;
+  const isDisagreement = l =>
+    (l.userScore != null && Math.abs(l.userScore - agOf(l)) >= 25) ||
+    (l.rating === 'good' && agOf(l) < 50) ||
+    (l.rating === 'bad'  && agOf(l) >= 60) ||
+    (l.promoted && agOf(l) < 50);
+  const isPositive = l => l.rating === 'good' || (l.userScore != null && l.userScore >= 70);
+  const isNegative = l => l.rating === 'bad'  || (l.userScore != null && l.userScore <= 30);
+
+  const item = l => ({
+    rating: l.rating, note: l.ratingNote, userScore: l.userScore,
+    agentScore: agOf(l), promoted: !!l.promoted, golden: !!l.golden, text: l.text,
+    profile: { jobTitle: l.jobTitle, company: l.company, industry: l.industry,
+               followers: l.followers, location: l.location, summary: l.summary }
+  });
+
+  const seen = new Set(), out = [];
+  const take = l => { if (l && !seen.has(l.id) && out.length < 12){ seen.add(l.id); out.push(item(l)); } };
+  rated.filter(l => l.golden).forEach(take);
+  rated.filter(isDisagreement).slice(0, 4).forEach(take);
+  rated.filter(isPositive).slice(0, 4).forEach(take);
+  rated.filter(isNegative).slice(0, 4).forEach(take);
+  return out;
+}
+
+/* Drop this offer's untouched, below-threshold posts older than 30 days. They've
+   aged out of Trigify's window (no dedup loss) and were never leads or rated. */
+function pruneOldLeads(leadsStore, offer){
+  const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+  let pruned = 0;
+  const kept = leadsStore.filter(l => {
+    if (l.offerId !== offer.id) return true;
+    const untouched = !l.promoted && !l.golden && !l.rating && l.userScore == null;
+    const nonLead = l.score < thresholdFor(offer, l.icpId);
+    const old = new Date(l.analyzedAt).getTime() < cutoff;
+    if (untouched && nonLead && old){ pruned++; return false; }
+    return true;
+  });
+  if (pruned) console.log(`  pruned ${pruned} untouched non-lead(s) older than 30 days`);
+  return kept;
+}
+
 /* ---------- analysis: score an offer's new posts ---------- */
 async function analyzeOffer(offerId, maxPosts){
   if (!anthropic) return { error: 'ANTHROPIC_API_KEY not set on the server' };
@@ -122,10 +175,7 @@ async function analyzeOffer(offerId, maxPosts){
   if (!toScore.length) return { analyzed: 0, recommended: 0, message: 'No new posts to analyze.' };
 
   /* feedback the user has given on this offer's past leads */
-  const feedback = leadsStore
-    .filter(l => l.offerId === offerId && (l.rating || l.userScore != null))
-    .slice(-8)
-    .map(l => ({ rating: l.rating, note: l.ratingNote, userScore: l.userScore, text: l.text }));
+  const feedback = buildFeedback(leadsStore, offerId);
 
   let inTok = 0, outTok = 0, cacheRead = 0, recommended = 0, enriched = 0;
   const now = new Date().toISOString();
@@ -146,12 +196,13 @@ async function analyzeOffer(offerId, maxPosts){
     for (const v of verdicts){
       const p = byId[v.id]; if (!p) continue;
       const pr = p.profile || {};
+      const recommend = v.score >= thresholdFor(offer, p.icpId);   // inbox = at/above the ICP threshold
       leadsStore.push({
         id: 'lead_' + v.id,
         postId: v.id,
         offerId, offerName: offer.name,
         icpId: p.icpId, icpName: p.icpName,
-        recommend: !!v.recommend,
+        recommend,
         score: v.score, icpFit: v.icp_fit,
         reason: v.reason, evidence: v.evidence,
         author: p.author?.name, profileUrl: p.author?.profile_url,
@@ -161,12 +212,14 @@ async function analyzeOffer(offerId, maxPosts){
         postUrl: p.content?.url, text: p.content?.text,
         publishedAt: p.published_at,
         analyzedAt: now, model: MODEL,
-        rating: null, ratingNote: null, userScore: null
+        rating: null, ratingNote: null, userScore: null,
+        promoted: false, golden: false
       });
-      if (v.recommend) recommended++;
+      if (recommend) recommended++;
     }
   }
-  await saveLeads(leadsStore);
+  const kept = pruneOldLeads(leadsStore, offer);
+  await saveLeads(kept);
   if (profileCache) await saveProfiles(profileCache);
   const creditsAfter = (await tg('/usage'))?.data?.credits?.total_consumed ?? creditsBefore;
   const enrichCredits = creditsAfter - creditsBefore;

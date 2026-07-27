@@ -3,6 +3,7 @@
    detail panel on the right (closed until a lead is clicked).
    ========================================================================== */
 import { loadLeads, recommended, inbox, leadById, rateLead, markContacted, deleteLead } from './leads.js';
+import { loadOffers } from './offers.js';
 import { confirmDialog } from './modal.js';
 
 const $  = s => document.querySelector(s);
@@ -39,8 +40,8 @@ function profileLine(l){
 }
 
 /* ══════════════ PAGE ══════════════ */
-export async function renderInbox(){ await loadLeads(); paintPage('inbox'); }
-export async function renderLeads(){ await loadLeads(); paintPage('leads'); }
+export async function renderInbox(){ await Promise.all([loadLeads(), loadOffers()]); paintPage('inbox'); }
+export async function renderLeads(){ await Promise.all([loadLeads(), loadOffers()]); paintPage('leads'); }
 
 function paintPage(view){
   const leads = view === 'inbox' ? inbox() : recommended();
