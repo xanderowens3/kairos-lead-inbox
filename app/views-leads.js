@@ -40,8 +40,22 @@ function profileLine(l){
 }
 
 /* ══════════════ PAGE ══════════════ */
-export async function renderInbox(){ await Promise.all([loadLeads(), loadOffers()]); paintPage('inbox'); }
-export async function renderLeads(){ await Promise.all([loadLeads(), loadOffers()]); paintPage('leads'); }
+// Paint instantly from cache, then revalidate in the background so switching
+// tabs never blocks on the network.
+export function renderInbox(){ paintPage('inbox'); revalidate('inbox'); }
+export function renderLeads(){ paintPage('leads'); revalidate('leads'); }
+
+async function revalidate(view){
+  const before = viewSig(view);
+  await Promise.all([loadLeads(), loadOffers()]);
+  ctx.syncInboxCount?.();
+  // repaint only if: still on this tab, no panel open, and the data changed
+  if ($('#main')?.dataset.view === view && selectedId === null && viewSig(view) !== before) paintPage(view);
+}
+function viewSig(view){
+  const l = view === 'inbox' ? inbox() : recommended();
+  return l.length + '|' + l.map(x => x.id + ':' + x.score).join(',');
+}
 
 function paintPage(view){
   const leads = view === 'inbox' ? inbox() : recommended();
@@ -51,7 +65,9 @@ function paintPage(view){
     : `Every recommended lead, all-time${leads.filter(l=>l.rating).length ? ` · ${leads.filter(l=>l.rating).length} rated` : ''}.`;
   selectedId = null;   // panel opens only when a lead is clicked
 
-  $('#main').innerHTML = `
+  const main = $('#main');
+  main.dataset.view = view;
+  main.innerHTML = `
     <div class="topbar">
       <h1>${title}</h1>
       <div class="sub">${sub}</div>
@@ -78,11 +94,13 @@ function paintPage(view){
       confirm: 'Mark contacted'
     });
     if (!ok) return;
-    const saved = markContacted(b.dataset.check);   // updates the shared cache synchronously
-    paintPage('inbox');                             // instant re-render from cache — no refetch
+    const id = b.dataset.check;
+    if (selectedId === id) closePanel();
+    b.closest('.lead-card')?.remove();     // pull the card out of the DOM now
+    markContacted(id);                     // flips cache flag synchronously; persists in background
+    ctx.syncInboxCount?.();                // count reflects the change immediately
     ctx.toast('Marked contacted — moved to All leads');
-    ctx.refreshInboxCount?.();
-    await saved;                                    // persist in the background
+    if (!$('#leadsList .lead-card')) paintPage('inbox');   // show empty state if that was the last
   }));
   $$('[data-del]').forEach(b => b.addEventListener('click', async e => {
     e.stopPropagation();
@@ -92,14 +110,13 @@ function paintPage(view){
       confirm: 'Delete', danger: true
     });
     if (!ok) return;
-    // Splice the shared cache synchronously, then repaint instantly from it —
-    // both Inbox and All leads read the same cache, so it's gone from both at
-    // once. The server write happens in the background (no round-trip lag).
-    const saved = deleteLead(b.dataset.del);
-    paintPage(view);
+    const id = b.dataset.del;
+    if (selectedId === id) closePanel();
+    b.closest('.lead-card')?.remove();     // instant: gone from the UI now
+    deleteLead(id);                        // splices cache synchronously; persists in background
+    ctx.syncInboxCount?.();                // both tabs read the same cache, count stays in sync
     ctx.toast('Lead deleted');
-    ctx.refreshInboxCount?.();
-    await saved;
+    if (!$('#leadsList .lead-card')) paintPage(view);
   }));
 }
 

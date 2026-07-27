@@ -18,12 +18,21 @@ export function leadsForIcp(icpId){
     .sort((a, b) => (b.score - a.score) || (new Date(b.analyzedAt) - new Date(a.analyzedAt)));
 }
 
+// In-flight optimistic changes, so a background refetch can't resurrect a lead
+// the user just deleted or un-inbox a lead they just marked contacted.
+const pendingDeletes = new Set();
+const pendingContacts = new Set();
+
 export async function loadLeads(){
   const r = await fetch('/data/leads');
-  cache = r.ok ? await r.json() : [];
-  if (!Array.isArray(cache)) cache = [];
+  let data = r.ok ? await r.json() : [];
+  if (!Array.isArray(data)) data = [];
+  if (pendingDeletes.size) data = data.filter(l => !pendingDeletes.has(l.id));
+  if (pendingContacts.size) for (const l of data) if (pendingContacts.has(l.id)) l.contacted = true;
+  cache = data;
   return cache;
 }
+export function loaded(){ return cache.length > 0; }
 export function allLeads(){ return cache; }
 export function leadById(id){ return cache.find(l => l.id === id); }
 
@@ -55,7 +64,10 @@ export async function markContacted(id){
   if (!l) return false;
   l.contacted = true;
   l.contactedAt = new Date().toISOString();
-  return persist();
+  pendingContacts.add(id);
+  const ok = await persist();
+  pendingContacts.delete(id);
+  return ok;
 }
 
 /* Promote a below-threshold lead into the inbox (or undo it). */
@@ -74,12 +86,15 @@ export async function pinGolden(id, on = true){
   return persist();
 }
 
-/* Delete a lead permanently from the store. */
+/* Delete a lead permanently from the store. Splices the cache synchronously so
+   the UI can update instantly; the server write and unguard happen after. */
 export async function deleteLead(id){
   const i = cache.findIndex(l => l.id === id);
-  if (i < 0) return false;
-  cache.splice(i, 1);
-  return persist();
+  if (i >= 0) cache.splice(i, 1);
+  pendingDeletes.add(id);
+  const ok = await persist();
+  pendingDeletes.delete(id);
+  return ok;
 }
 
 /* Rate a lead — feeds future analysis runs as a few-shot example.

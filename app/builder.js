@@ -116,7 +116,9 @@ function renderBuild(){
   const inPlatform = Object.entries(TYPES).filter(([,v]) => v.platform === platform);
   const off = currentOffer ? offerById(currentOffer) : null;
 
-  $('#main').innerHTML = `
+  const main = $('#main');
+  main.dataset.view = 'build';
+  main.innerHTML = `
     <div class="topbar">
       ${off ? `<button class="back" id="back">&larr; ${esc(off.name)}</button>` : ''}
       <h1>New <em>ICP</em></h1>
@@ -619,7 +621,7 @@ export function bindRows(refreshView){
     const l = leadById(b.dataset.promote);
     await promoteLead(b.dataset.promote, !l?.promoted);
     toast(l?.promoted ? 'Removed from inbox' : 'Promoted to inbox');
-    refreshInboxCount(); refresh();
+    syncInboxCount(); refresh();
   }));
   $$('[data-rate][data-rlead]').forEach(b => b.addEventListener('click', async e => {
     e.stopPropagation();
@@ -746,17 +748,20 @@ async function loadSearches(){
 }
 
 function renderList(){
-  $('#main').innerHTML = `
+  const main = $('#main');
+  main.dataset.view = 'list';
+  main.innerHTML = `
     <div class="topbar">
       <h1>All <em>ICPs</em></h1>
       <div class="sub">Every listening search on the account, including any not attached to an offer.</div>
       <div class="swash"></div>
     </div>
-    <div class="scroll"><div class="list-in" id="listBody"><div class="empty"><p>Loading…</p></div></div></div>`;
+    <div class="scroll"><div class="list-in" id="listBody">${searches.length ? '' : '<div class="empty"><p>Loading…</p></div>'}</div></div>`;
+  if (searches.length) paintList();          // instant from cache
   // load offers + schedules too, so ICP cards render exactly as in the offer view
   Promise.all([loadSearches(), loadOffers(), loadSchedules()])
     .then(() => ensureIcpData(searches.map(s => s.id)))
-    .then(paintList);
+    .then(() => { if ($('#main')?.dataset.view === 'list') paintList(); });   // revalidate
 }
 
 function paintList(){
@@ -807,18 +812,21 @@ async function loadCredits(){
 }
 
 /* ---------------- BOOT ---------------- */
-async function refreshInboxCount(){
-  await loadLeads();
-  const n = countInbox();
+function syncInboxCount(){                 // instant — counts the current cache
   const dot = $('#inboxCnt');
-  if (dot) dot.textContent = n || '';
+  if (dot) dot.textContent = countInbox() || '';
 }
-initOffers({ go, toast, rowHTML, bindRows, loadSearches, ensureIcpData, refreshInboxCount,
-             get searches(){ return searches; } });
-initLeads({ go, toast, refreshInboxCount });
+async function refreshInboxCount(){        // refetch, then sync (boot / after analysis)
+  await loadLeads();
+  syncInboxCount();
+}
+initOffers({ go, toast, rowHTML, bindRows, loadSearches, ensureIcpData,
+             refreshInboxCount, syncInboxCount, get searches(){ return searches; } });
+initLeads({ go, toast, refreshInboxCount, syncInboxCount });
 
 await loadOffers();
-await loadSearches();
+await loadLeads();      // warm the leads cache so the first inbox paint is populated
+loadSearches();         // Trigify data in the background — ICP/offer tabs revalidate on open
 loadCredits();
-refreshInboxCount();
+syncInboxCount();
 go('inbox');

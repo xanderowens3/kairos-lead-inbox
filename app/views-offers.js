@@ -123,10 +123,15 @@ async function runAnalysis(o, id){
 export function initOffers(c){ ctx = c; }
 
 /* ══════════════ LIST ══════════════ */
-export async function renderOffers(){
-  await loadOffers();
+export function renderOffers(){
+  paintOffers();                       // instant from cache
+  loadOffers().then(() => { if ($('#main')?.dataset.view === 'offers') paintOffers(); });
+}
+function paintOffers(){
+  const main = $('#main'); if (!main) return;
+  main.dataset.view = 'offers';
   const list = offers();
-  $('#main').innerHTML = `
+  main.innerHTML = `
     <div class="topbar">
       <h1>Your <em>offers</em></h1>
       <div class="sub">Each offer is the context the agent judges every post against.</div>
@@ -191,7 +196,9 @@ export async function renderOffer(id){
     ? `<ul class="bullets ${neg?'neg':''}${pos?'pos':''}">${arr.filter(Boolean).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`
     : `<p class="none">Not set</p>`;
 
-  $('#main').innerHTML = `
+  const main = $('#main');
+  main.dataset.view = 'offer';
+  main.innerHTML = `
     <div class="topbar">
       <button class="back" id="back">&larr; All offers</button>
       <div class="offer-headrow">
@@ -303,7 +310,9 @@ export function renderEditor(){
     <div class="line"><input type="text" data-lk="${key}" data-i="${i}" value="${esc(v)}"
       placeholder="${esc(ph)}"><button class="x" data-lx="${key}" data-i="${i}">&times;</button></div>`).join('');
 
-  $('#main').innerHTML = `
+  const main = $('#main');
+  main.dataset.view = 'editor';
+  main.innerHTML = `
     <div class="topbar">
       <button class="back" id="back">&larr; Cancel</button>
       <h1>${o.name ? 'Edit' : 'New'} <em>offer</em></h1>
