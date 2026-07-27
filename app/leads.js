@@ -23,10 +23,10 @@ async function persist(){
   return r.ok;
 }
 
-/* Recommended leads, newest analysis first tiebroken by score. */
+/* Recommended leads, most recent first (tiebroken by score). */
 export function recommended(){
   return cache.filter(l => l.recommend)
-    .sort((a, b) => (b.score - a.score) || (new Date(b.analyzedAt) - new Date(a.analyzedAt)));
+    .sort((a, b) => (new Date(b.analyzedAt) - new Date(a.analyzedAt)) || (b.score - a.score));
 }
 
 const DAYS3 = 3 * 24 * 3600 * 1000;

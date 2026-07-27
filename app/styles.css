@@ -635,6 +635,22 @@ textarea::placeholder{color:var(--faint)}
   color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:9px;
   padding:8px 14px;cursor:pointer;transition:.14s}
 .sched-cancel:hover{border-color:#E0665A;color:#D64535;background:#FDECEA}
+.sched-cancel.sm{padding:6px 12px;font-size:11.5px}
+
+/* merged unit: ICP row + attached schedule strip read as one card */
+.icp-unit{margin-bottom:13px}
+.icp-unit .icp-card{margin-bottom:0}
+.icp-unit.has-sched .icp-card{border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom:none}
+.sched-strip{display:flex;align-items:center;gap:11px;padding:9px 16px;
+  background:var(--blue-tint);border:1px solid #C6D9F8;border-radius:0 0 14px 14px;
+  font-size:12px;color:var(--muted);line-height:1.4}
+.sched-strip.warming{background:#FFF7ED;border-color:#F3D9AE}
+.sched-strip .sched-ic{width:20px;height:20px}
+.sched-strip .strip-txt{flex:1;min-width:0}
+.sched-strip b{color:var(--ink);font-weight:600}
+.sched-strip .sched-pill{margin-left:0;margin-right:6px}
+.strip-sep{color:var(--faint);margin:0 5px}
+.sched-strip .sched-err{color:var(--red)}
 
 /* ─────────── CONFIRM MODAL ─────────── */
 .modal-wrap{position:fixed;inset:0;z-index:100;display:grid;place-items:center;

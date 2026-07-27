@@ -214,7 +214,7 @@ async function waitForResults(searchId, tries = 9, delayMs = 10000){
   return false;
 }
 
-async function runDueSchedule(sch){
+async function runDueSchedule(sch, schedules){
   // first run: create the Trigify search, attach it, and let it collect
   if (!sch.searchId){
     const id = await createSearch(sch.payload);
@@ -222,6 +222,9 @@ async function runDueSchedule(sch){
     sch.status = 'active';
     sch.warming = true;
     sch.warmups = 0;
+    // Persist the searchId IMMEDIATELY, before the slow wait/analysis below.
+    // Otherwise a restart mid-run would see searchId=null and create a duplicate.
+    await saveSchedules(schedules);
     const offers = await getOffers();
     const off = offers.find(o => o.id === sch.offerId);
     if (off){
@@ -277,7 +280,7 @@ async function schedulerTick(){
     for (const sch of schedules){
       if (!sch.nextRun || new Date(sch.nextRun).getTime() > now) continue;
       try {
-        const res = await runDueSchedule(sch);
+        const res = await runDueSchedule(sch, schedules);
         // if a fresh search hasn't collected yet, re-check soon instead of
         // waiting a whole cycle — but don't loop forever
         if (sch.warming && !res.skipped && res.analyzed === 0 && (sch.warmups || 0) < MAX_WARMUPS){

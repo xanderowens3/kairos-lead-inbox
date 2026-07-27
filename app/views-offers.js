@@ -53,6 +53,27 @@ function scheduledCardHTML(sc){
   </div>`;
 }
 
+/* compact schedule status attached beneath a created ICP's row (merged unit) */
+function scheduleStripHTML(sc){
+  const label = FREQ_LABEL[sc.frequency] || 'every day';
+  const state = sc.warming ? 'warming' : 'active';
+  const stateLabel = sc.warming ? 'Warming up' : 'Scheduled';
+  let outcome = '';
+  if (sc.lastRunAt){
+    outcome = sc.lastError
+      ? `<span class="strip-sep">·</span><span class="sched-err">last run ${fmtWhen(sc.lastRunAt)}: ${esc(sc.lastError)}</span>`
+      : `<span class="strip-sep">·</span>last run ${fmtWhen(sc.lastRunAt)}: <b>${sc.lastAnalyzed ?? 0}</b> analyzed, <b>${sc.lastRecommended ?? 0}</b> recommended`;
+  }
+  return `<div class="sched-strip ${state}">
+    ${clockSvg}
+    <div class="strip-txt">
+      <span class="sched-pill ${state}">${stateLabel}</span>
+      Runs <b>${label}</b> <span class="strip-sep">·</span> next <b>${fmtWhen(sc.nextRun)}</b>${sc.warming?' <span class="strip-sep">·</span> waiting for first results':''}${outcome}
+    </div>
+    <button class="sched-cancel sm" data-cancel="${sc.id}">Stop</button>
+  </div>`;
+}
+
 const $  = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
@@ -160,7 +181,10 @@ export async function renderOffer(id){
     .filter(Boolean);
   await ctx.ensureIcpData(mine.map(s => s.id));   // accurate post counts + instant expand
   await loadSchedules();
-  const mySchedules = schedulesForOffer(id);   // pending + active, shown with live outcome
+  const mySchedules = schedulesForOffer(id);
+  const pending = mySchedules.filter(s => !s.searchId);          // not yet created → own card
+  const schedBySearch = {};                                       // created → attached to its ICP row
+  mySchedules.forEach(s => { if (s.searchId) schedBySearch[s.searchId] = s; });
   const missing = (o.searchIds || []).length - mine.length;
   const r = readiness(o);
   const bullets = (arr, neg, pos) => (arr||[]).filter(Boolean).length
@@ -224,8 +248,13 @@ export async function renderOffer(id){
         <span><b>New ICP</b><span class="add-icp-sub">A listening search for this offer</span></span>
       </button>
 
-      ${mySchedules.map(scheduledCardHTML).join('')}
-      ${mine.map(s => ctx.rowHTML(s)).join('')}
+      ${pending.map(scheduledCardHTML).join('')}
+      ${mine.map(s => {
+        const sc = schedBySearch[s.id];
+        return sc
+          ? `<div class="icp-unit has-sched">${ctx.rowHTML(s)}${scheduleStripHTML(sc)}</div>`
+          : ctx.rowHTML(s);
+      }).join('')}
       ${missing ? `<div class="none-box warnbox">${missing} ICP${missing===1?' was':'s were'}
         deleted in Trigify and no longer exist${missing===1?'s':''}.
         <button class="linkbtn" id="tidy">Remove from this offer</button></div>` : ''}
