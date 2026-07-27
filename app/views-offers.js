@@ -20,14 +20,17 @@ const fmtWhen = iso => {
   return `${rel} at ${d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' })}`;
 };
 const clockSvg = `<svg viewBox="0 0 24 24" class="sched-ic"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
+const FREQ_LABEL = { 'hourly':'every hour', 'every-12h':'every 12 hours', 'daily':'every day',
+  'weekly':'every week', 'monthly':'every month', 'quarterly':'every 3 months' };
 
 function scheduledCardHTML(sc){
+  const label = FREQ_LABEL[sc.frequency] || 'every day';
   return `<div class="sched-card">
     <div class="sched-l">
       ${clockSvg}
       <div>
         <div class="sched-name">${esc(sc.name || 'Untitled ICP')}</div>
-        <div class="sched-sub">Scheduled — first run <b>${fmtWhen(sc.nextRun)}</b>, then daily${sc.timeOfDay?` at ${sc.timeOfDay}`:''}. Not collecting yet.</div>
+        <div class="sched-sub">Scheduled — first run <b>${fmtWhen(sc.nextRun)}</b>, then <b>${label}</b>. Not collecting yet.</div>
         ${sc.lastError ? `<div class="sched-err">Last attempt failed: ${esc(sc.lastError)} — retrying.</div>` : ''}
       </div>
     </div>

@@ -183,7 +183,10 @@ async function analyzeOffer(offerId, maxPosts){
    begins), attach it to the offer, then run analysis so leads land in the inbox.
    Each run advances nextRun by 24h, so leads refresh every morning at the set
    time. Runs entirely in this always-on server — no external cron. */
-const DAY_MS = 24 * 3600 * 1000;
+const HOUR_MS = 3600 * 1000;
+const FREQ_MS = { 'hourly': HOUR_MS, 'every-12h': 12*HOUR_MS, 'daily': 24*HOUR_MS,
+  'weekly': 7*24*HOUR_MS, 'monthly': 30*24*HOUR_MS, 'quarterly': 90*24*HOUR_MS };
+const intervalMs = sch => FREQ_MS[sch.frequency || sch.payload?.filters?.frequency] || FREQ_MS.daily;
 
 async function createSearch(payload){
   const r = await fetch(TRIGIFY + '/searches', {
@@ -232,9 +235,10 @@ async function schedulerTick(){
       if (!sch.nextRun || new Date(sch.nextRun).getTime() > now) continue;
       try {
         await runDueSchedule(sch);
-        // advance to the next day at the same time, skipping any missed days
+        // advance by the ICP's frequency, skipping any missed cycles
+        const step = intervalMs(sch);
         let next = new Date(sch.nextRun).getTime();
-        while (next <= Date.now()) next += DAY_MS;
+        while (next <= Date.now()) next += step;
         sch.nextRun = new Date(next).toISOString();
       } catch (e) {
         sch.lastError = e.message;

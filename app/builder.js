@@ -4,7 +4,7 @@
 import { TYPES, PLATFORMS, ICONS, FREQUENCY, TIME_FRAME, LI_SORT, LI_CONTENT,
          buildPayload, blank, verifyResults } from './schema.js';
 import { loadOffers, offerById, attachSearch } from './offers.js';
-import { addSchedule, nextOccurrence } from './schedules.js';
+import { addSchedule } from './schedules.js';
 import { initOffers, renderOffers, renderOffer } from './views-offers.js';
 import { initLeads, renderInbox, renderLeads } from './views-leads.js';
 import { loadLeads, countInbox } from './leads.js';
@@ -20,7 +20,18 @@ let s = blank();
 let searches = [];
 let apiError = null, lastError = null;
 let results = {}, expanded = {}, showMore = false;
-let sched = { mode: 'now', time: '09:00' };   // ICP run scheduling (builder state)
+const pad2 = n => String(n).padStart(2, '0');
+const isoDate = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+const todayISO = () => isoDate(new Date());
+/* default first run: the next whole hour from now (always in the future) */
+function defaultSched(){
+  const d = new Date(Date.now() + 3600e3); d.setMinutes(0, 0, 0);
+  return { mode: 'now', date: isoDate(d), time: `${pad2(d.getHours())}:00` };
+}
+const FREQ_LABEL = { 'hourly':'every hour', 'every-12h':'every 12 hours', 'daily':'every day',
+  'weekly':'every week', 'monthly':'every month', 'quarterly':'every 3 months' };
+let sched = defaultSched();          // ICP run scheduling (builder state)
+let schedValid = true;               // is the chosen date+time in the future?
 let icpOpen = {}, icpLoading = {}, icpView = {}, details = {};   // per-ICP state
 
 /* The list endpoint returns only a summary (no query/filters), so fetch each
@@ -90,7 +101,7 @@ function go(v, arg){
   if (v === 'offer'){  currentOffer = null; return renderOffer(arg); }
   if (v === 'list'){   currentOffer = null; return renderList(); }
   currentOffer = arg ?? null;
-  sched = { mode: 'now', time: '09:00' };   // fresh scheduling defaults per new build
+  sched = defaultSched();   // fresh scheduling defaults per new build
   renderBuild();
 }
 $$('.nav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); go(a.dataset.view); }));
@@ -151,14 +162,17 @@ function renderBuild(){
             <button type="button" class="runmode ${sched.mode==='now'?'on':''}" data-mode="now">
               <b>Run now</b><span>Start collecting immediately</span></button>
             <button type="button" class="runmode ${sched.mode==='daily'?'on':''}" data-mode="daily">
-              <b>Schedule daily</b><span>First run at a set time, then every morning</span></button>
+              <b>Schedule</b><span>Pick the date &amp; time of the first run</span></button>
           </div>
           <div class="sched-when" style="display:${sched.mode==='daily'?'block':'none'}">
-            <div class="field"><label>Run time</label>
-              <input type="time" id="f_runat" value="${sched.time}">
-              <p class="hint">First run <b id="firstRun"></b>. Leads land in your inbox at this time each day.
-                Nothing is collected — and no credits spent — until the first run.</p>
+            <div class="grid2">
+              <div class="field"><label>Start date</label>
+                <input type="date" id="f_rundate" value="${sched.date}" min="${todayISO()}"></div>
+              <div class="field"><label>Start time</label>
+                <input type="time" id="f_runtime" value="${sched.time}"></div>
             </div>
+            <p class="sched-summary" id="schedSummary"></p>
+            <p class="hint">Nothing is collected — and no credits are spent — until the first run.</p>
           </div>
         </div>
       </section>` : ''}
@@ -275,26 +289,55 @@ function bind(){
     $$('.runmode').forEach(x => x.classList.toggle('on', x === b));
     const when = document.querySelector('.sched-when');
     if (when) when.style.display = sched.mode === 'daily' ? 'block' : 'none';
-    updateFirstRun(); paint();
+    updateSchedSummary();
   }));
-  $('#f_runat')?.addEventListener('input', e => { sched.time = e.target.value || '09:00'; updateFirstRun(); });
-  updateFirstRun();
+  $('#f_rundate')?.addEventListener('input', e => { sched.date = e.target.value; syncTimeMin(); updateSchedSummary(); });
+  $('#f_runtime')?.addEventListener('input', e => { sched.time = e.target.value; updateSchedSummary(); });
+  $('#f_freq')?.addEventListener('change', updateSchedSummary);   // recurrence text follows frequency
+  syncTimeMin(); updateSchedSummary();
 
   $('#create')?.addEventListener('click', create);
 }
 
-/* friendly "today/tomorrow at 9:00 AM" for the scheduled first run */
-function updateFirstRun(){
-  const el = $('#firstRun'); if (!el) return;
-  const iso = nextOccurrence(sched.time || '09:00');
-  const d = new Date(iso);
-  const today = new Date(); today.setHours(0,0,0,0);
-  const day = new Date(d); day.setHours(0,0,0,0);
-  const rel = day.getTime() === today.getTime() ? 'today'
-    : day.getTime() === today.getTime() + 86400000 ? 'tomorrow'
-    : d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
-  const time = d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
-  el.textContent = `${rel} at ${time}`;
+/* the chosen first run as a Date, or null if incomplete/invalid */
+function runDateTime(){
+  if (!sched.date || !sched.time) return null;
+  const d = new Date(`${sched.date}T${sched.time}`);
+  return isNaN(d) ? null : d;
+}
+
+/* if the start date is today, the time can't be earlier than now */
+function syncTimeMin(){
+  const rt = $('#f_runtime'); if (!rt) return;
+  if (sched.date === todayISO()){
+    const n = new Date();
+    rt.min = `${pad2(n.getHours())}:${pad2(n.getMinutes())}`;
+  } else rt.removeAttribute('min');
+}
+
+/* Validate the future-only rule and write the plain-language summary. */
+function updateSchedSummary(){
+  const d = runDateTime();
+  schedValid = !!(d && d.getTime() > Date.now());
+  const el = $('#schedSummary');
+  if (el){
+    if (!d){
+      el.className = 'sched-summary bad';
+      el.textContent = 'Pick a start date and time.';
+    } else if (!schedValid){
+      el.className = 'sched-summary bad';
+      el.textContent = 'That moment has already passed — pick a later date or time.';
+    } else {
+      el.className = 'sched-summary';
+      const dateStr = d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
+      const timeStr = d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+      const label = FREQ_LABEL[s.frequency] || 'every day';
+      const anchored = ['daily','weekly','monthly','quarterly'].includes(s.frequency) ? ` at ${timeStr}` : '';
+      el.innerHTML = `On <b>${dateStr}</b> this will first trigger at <b>${timeStr}</b>, `
+        + `and from that point on it will trigger <b>${label}</b>${anchored}.`;
+    }
+  }
+  paint();
 }
 
 const tagCls = k => k==='keywords_and'?'and' : k==='keywords_not'?'not' : 'who';
@@ -321,9 +364,11 @@ function paint(){
   if (note) note.innerHTML = capN
     ? `1 credit to create, plus 1 for every result collected — up to <b>${capN+1} credits</b>.`
     : `1 credit to create, plus 1 for every result collected. Set a maximum to cap it.`;
+  const scheduling = sched.mode === 'daily' && currentOffer;
+  const canSubmit = ready && (!scheduling || schedValid);
   const btn = $('#create');
-  if (btn){ btn.disabled = !ready;
-    btn.textContent = ready ? (sched.mode === 'daily' && currentOffer ? 'Schedule ICP' : 'Create ICP')
+  if (btn){ btn.disabled = !canSubmit;
+    btn.textContent = ready ? (scheduling ? 'Schedule ICP' : 'Create ICP')
       : t.mode === 'keywords' ? 'Add at least one keyword' : 'Fill in the field above'; }
 }
 
@@ -338,7 +383,7 @@ async function create(){
     const back = currentOffer;
     if (back && id) await attachSearch(back, id);
     toast('ICP created');
-    s = blank(); sched = { mode:'now', time:'09:00' };
+    s = blank(); sched = defaultSched();
     await loadSearches(); loadCredits();
     back ? go('offer', back) : go('list');
   } else {
@@ -352,6 +397,8 @@ async function create(){
 /* Schedule the ICP instead of creating it now: store the Trigify payload + a
    daily time. The server's scheduler creates it and runs analysis at that time. */
 async function scheduleIcp(){
+  const runDate = runDateTime();
+  if (!runDate || runDate.getTime() <= Date.now()){ updateSchedSummary(); return; }
   const btn = $('#create'); btn.disabled = true; btn.textContent = 'Scheduling…';
   const off = offerById(currentOffer);
   const rec = {
@@ -360,8 +407,9 @@ async function scheduleIcp(){
     offerName: off?.name || '',
     name: s.name || 'Untitled ICP',
     payload: buildPayload(s),
+    frequency: s.frequency,
     timeOfDay: sched.time,
-    nextRun: nextOccurrence(sched.time),
+    nextRun: runDate.toISOString(),
     searchId: null,
     status: 'scheduled',
     createdAt: new Date().toISOString(),
@@ -371,7 +419,7 @@ async function scheduleIcp(){
   const ok = await addSchedule(rec);
   if (ok){
     toast('ICP scheduled');
-    s = blank(); sched = { mode:'now', time:'09:00' };
+    s = blank(); sched = defaultSched();
     go('offer', currentOffer);
   } else {
     toast('Could not schedule', true);
