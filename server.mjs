@@ -179,7 +179,7 @@ async function analyzeOffer(offerId, maxPosts){
   /* feedback the user has given on this offer's past leads */
   const feedback = buildFeedback(leadsStore, offerId);
 
-  let inTok = 0, outTok = 0, cacheRead = 0, recommended = 0, enriched = 0;
+  let inTok = 0, outTok = 0, cacheRead = 0, recommended = 0, enriched = 0, failedBatches = 0;
   const now = new Date().toISOString();
   const creditsBefore = (await tg('/usage'))?.data?.credits?.total_consumed ?? 0;
 
@@ -191,7 +191,15 @@ async function analyzeOffer(offerId, maxPosts){
       if (p.profile) enriched++;
     }));
 
-    const { verdicts, usage } = await judgeBatch(anthropic, offer, batch, feedback);
+    // one bad batch must not lose the whole run — log it and keep going
+    let verdicts, usage;
+    try {
+      ({ verdicts, usage } = await judgeBatch(anthropic, offer, batch, feedback));
+    } catch (e) {
+      failedBatches++;
+      console.log(`  batch ${1 + i / BATCH} failed, skipping: ${e.message}`);
+      continue;
+    }
     inTok += usage.input_tokens; outTok += usage.output_tokens;
     cacheRead += usage.cache_read_input_tokens || 0;
     const byId = Object.fromEntries(batch.map(p => [p.id, p]));
@@ -226,9 +234,12 @@ async function analyzeOffer(offerId, maxPosts){
   const creditsAfter = (await tg('/usage'))?.data?.credits?.total_consumed ?? creditsBefore;
   const enrichCredits = creditsAfter - creditsBefore;
   const cost = priceOf(inTok, outTok);
-  console.log(`  analyzed ${toScore.length} → ${recommended} recommended · ${enriched} enriched`
+  const analyzed = toScore.length - failedBatches * BATCH;
+  console.log(`  analyzed ${analyzed} → ${recommended} recommended · ${enriched} enriched`
+    + (failedBatches ? ` · ${failedBatches} batch(es) failed` : '')
     + ` · ~$${cost.toFixed(3)} Claude · ${enrichCredits} Trigify credits (${cacheRead} cached tokens)`);
-  return { analyzed: toScore.length, recommended, enriched, remaining: fresh.length - toScore.length,
+  return { analyzed: Math.max(0, analyzed), recommended, enriched,
+           remaining: fresh.length - toScore.length, failedBatches,
            cost: +cost.toFixed(4), enrichCredits, cacheRead };
 }
 

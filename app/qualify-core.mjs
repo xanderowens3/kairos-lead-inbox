@@ -14,7 +14,16 @@ export const MODEL = 'claude-sonnet-5';    // stronger judgment; thinking disabl
 export const BATCH = 8;
 
 const list = a => (a || []).filter(Boolean).map(x => '- ' + x).join('\n') || '- (none given)';
-export const clean = t => (t || '').replace(/\s+/g, ' ').trim().slice(0, 900);
+
+/* Emoji are UTF-16 surrogate PAIRS. Truncating text can cut one in half, leaving
+   a lone surrogate that cannot be encoded as valid JSON — the API then rejects
+   the whole batch with "no low surrogate in string". Drop any unpaired halves. */
+export const stripLoneSurrogates = t => String(t ?? '')
+  .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')    // high surrogate with no low
+  .replace(/(^|[^\uD800-\uDBFF])([\uDC00-\uDFFF])/g, '$1'); // low surrogate with no high
+
+export const clean = t => stripLoneSurrogates(
+  (t || '').replace(/\s+/g, ' ').trim().slice(0, 900));
 
 /* one-line profile for a feedback example (mirrors how live posts show it) */
 function fbProfile(pr){
@@ -133,15 +142,18 @@ function profileLine(pr){
 /* Judge one batch of posts. `client` is an Anthropic SDK instance.
    Each post may carry an enriched `.profile` object (see server /profile/enrich). */
 export async function judgeBatch(client, offer, posts, feedback = []){
-  const payload = posts.map(p =>
+  // sanitize the assembled strings too — author names and profile fields carry
+  // emoji as well and never pass through clean()
+  const payload = stripLoneSurrogates(posts.map(p =>
     `<post id="${p.id}">\nauthor: ${p.author?.name ?? 'unknown'}\n${profileLine(p.profile)}\ntext: ${clean(p.content?.text)}\n</post>`
-  ).join('\n\n');
+  ).join('\n\n'));
 
   const res = await client.messages.create({
     model: MODEL,
     max_tokens: 4000,
     thinking: { type: 'disabled' },   // scoring is single-step; keep output tokens (and cost) down
-    system: [{ type: 'text', text: buildSystem(offer, feedback), cache_control: { type: 'ephemeral' } }],
+    system: [{ type: 'text', text: stripLoneSurrogates(buildSystem(offer, feedback)),
+               cache_control: { type: 'ephemeral' } }],
     output_config: { format: { type: 'json_schema', schema: SCHEMA } },
     messages: [{ role: 'user', content: `Judge each post. One verdict per post id.\n\n${payload}` }]
   });
