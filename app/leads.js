@@ -46,9 +46,11 @@ function persist(){
   return writeChain;
 }
 
-/* Recommended leads, most recent first (tiebroken by score). */
+/* Recommended leads from the latest run, most recent first (tiebroken by score).
+   Archived leads are earlier runs: kept in the store for dedup and feedback, but
+   out of these views so you only work the current batch. */
 export function recommended(){
-  return cache.filter(isRecommended)
+  return cache.filter(l => !l.archived && isRecommended(l))
     .sort((a, b) => (new Date(b.analyzedAt) - new Date(a.analyzedAt)) || (b.score - a.score));
 }
 

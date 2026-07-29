@@ -678,14 +678,15 @@ function resultsHTML(rows, query, icpId){
 /* A scored post renders exactly like a lead in the Inbox — click it to open the
    detail drawer with the agent's reasoning and the score control. */
 function scoredCardHTML(l, thr){
-  const rec = isRecommended(l);
+  const rec = !l.archived && isRecommended(l);
+  const status = l.archived ? 'earlier run' : (rec ? 'in inbox' : 'below line');
   const bits = [l.jobTitle, l.company, l.industry, l.location].filter(Boolean).join(' · ');
   return `<div class="lead-card" data-scored="${l.id}">
     <div class="lc-score">${l.score}</div>
     <div class="lc-body">
       <div class="lc-head">
         <span class="lc-name">${esc(l.author || 'Unknown')}</span>
-        <span class="rev-status">${rec ? 'in inbox' : 'below line'}</span>
+        <span class="rev-status">${status}</span>
         <span class="lc-date">${l.analyzedAt ? new Date(l.analyzedAt).toLocaleDateString('en-US',
           { month:'short', day:'numeric', year:'numeric' }) : ''}</span>
       </div>

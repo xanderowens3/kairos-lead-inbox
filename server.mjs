@@ -179,6 +179,16 @@ async function analyzeOffer(offerId, maxPosts, onProgress){
   const toScore = fresh.slice(0, maxPosts || fresh.length);
   if (!toScore.length) return { analyzed: 0, recommended: 0, message: 'No new posts to analyze.' };
 
+  /* Fresh slate. A new batch replaces the last one in the Inbox and Leads views,
+     so you only ever look at this run's leads. The old rows stay in the store —
+     invisible to those views — because they are still the dedup record (deleting
+     them would re-score and re-charge the same posts) and still the feedback the
+     agent calibrates on. The 30-day prune is what finally removes them. */
+  let archived = 0;
+  for (const l of leadsStore){
+    if (l.offerId === offerId && !l.archived){ l.archived = true; archived++; }
+  }
+
   /* feedback the user has given on this offer's past leads */
   const feedback = buildFeedback(leadsStore, offerId);
 
@@ -226,7 +236,7 @@ async function analyzeOffer(offerId, maxPosts, onProgress){
       publishedAt: p.published_at,
       analyzedAt: now, model: MODEL,
       rating: null, ratingNote: null, userScore: null,
-      promoted: false, golden: false
+      promoted: false, golden: false, archived: false
     });
     if (recommend) recommended++;
     onProgress?.(++scoredCount, toScore.length);
@@ -352,15 +362,9 @@ async function runDueSchedule(sch, schedules){
   }
   try {
     await mark('analyzing', { progress: null });
-    // throttle progress writes — one every 5 posts is enough for the UI
-    let lastWrite = 0;
-    const r = await analyzeOffer(sch.offerId, 0, (done, total) => {
-      sch.progress = { done, total };
-      if (done === 0 || done === total || done - lastWrite >= 5){
-        lastWrite = done;
-        saveSchedules(schedules).catch(() => {});
-      }
-    });
+    // No progress writes: an un-awaited save could land after the final
+    // "ready" write and stomp the state back to analyzing, stranding the ICP.
+    const r = await analyzeOffer(sch.offerId, 0);
     if (r.error){                                   // e.g. offer has no ICPs
       sch.lastAnalyzed = 0; sch.lastRecommended = 0;
       await mark('error', { lastError: r.error, progress: null });
@@ -385,6 +389,21 @@ function advance(sch){   // to the next occurrence at the ICP's frequency
   let next = new Date(sch.nextRun).getTime();
   while (next <= Date.now()) next += step;
   sch.nextRun = new Date(next).toISOString();
+}
+
+/* A run only lives inside this process, so nothing can still be running right
+   after a boot. Clear any state left mid-flight by a restart or a crash — and
+   re-run it now if its slot has passed, so a killed run isn't silently lost. */
+async function recoverStaleRuns(){
+  const schedules = await getSchedules();
+  const stuck = schedules.filter(s => s.runState === 'collecting' || s.runState === 'analyzing');
+  if (!stuck.length) return;
+  for (const s of stuck){
+    s.runState = 'ready';
+    s.progress = null;
+    console.log(`  scheduler: cleared stale "${s.runState}" state on "${s.name}"`);
+  }
+  await saveSchedules(schedules);
 }
 
 let ticking = false;
@@ -537,6 +556,6 @@ server.listen(PORT, HOST, () => {
   console.log(`  analysis: ${anthropic ? 'ready (' + MODEL + ')' : 'DISABLED — ANTHROPIC_API_KEY not set'}`);
   // scheduler: check every minute for ICPs whose run time has arrived
   setInterval(schedulerTick, 60 * 1000);
-  schedulerTick();
+  recoverStaleRuns().then(schedulerTick).catch(e => console.log('  recover failed:', e.message));
   console.log(`  scheduler: on (checks every 60s)\n`);
 });
