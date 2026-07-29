@@ -140,7 +140,8 @@ function pruneOldLeads(leadsStore, offer){
   let pruned = 0;
   const kept = leadsStore.filter(l => {
     if (l.offerId !== offer.id) return true;
-    const untouched = !l.promoted && !l.golden && !l.rating && l.userScore == null;
+    // acting on a lead — contacting, rating, scoring, pinning — makes it permanent
+    const untouched = !l.contacted && !l.promoted && !l.golden && !l.rating && l.userScore == null;
     const nonLead = l.score < thresholdFor(offer, l.icpId);
     const old = new Date(l.analyzedAt).getTime() < cutoff;
     if (untouched && nonLead && old){ pruned++; return false; }
@@ -183,10 +184,15 @@ async function analyzeOffer(offerId, maxPosts, onProgress){
      so you only ever look at this run's leads. The old rows stay in the store —
      invisible to those views — because they are still the dedup record (deleting
      them would re-score and re-charge the same posts) and still the feedback the
-     agent calibrates on. The 30-day prune is what finally removes them. */
+     agent calibrates on. The 30-day prune is what finally removes them.
+
+     Anything you ACTED ON is exempt and stays visible in All leads: marking a
+     lead contacted, rating it, scoring it or pinning it is the signal that it
+     matters, so a later batch must not sweep it away. */
+  const actedOn = l => l.contacted || l.rating || l.golden || l.promoted || l.userScore != null;
   let archived = 0;
   for (const l of leadsStore){
-    if (l.offerId === offerId && !l.archived){ l.archived = true; archived++; }
+    if (l.offerId === offerId && !l.archived && !actedOn(l)){ l.archived = true; archived++; }
   }
 
   /* feedback the user has given on this offer's past leads */
