@@ -54,11 +54,16 @@ function removeLead(id){
   return writeChain;
 }
 
-/* Recommended leads from the latest run, most recent first (tiebroken by score).
-   Archived leads are earlier runs: kept in the store for dedup and feedback, but
-   out of these views so you only work the current batch. */
+/* Anything you acted on — contacted, rated, scored, pinned — is yours to keep.
+   It stays in All leads regardless of score or how many batches have since run,
+   until you delete it explicitly. */
+export const actedOn = l => l.contacted || l.rating || l.golden || l.promoted || l.userScore != null;
+
+/* All leads = everything you kept, plus the current batch's recommendations.
+   Archived leads are earlier runs: still in the store for dedup and feedback,
+   but out of this view so you only work the latest batch. */
 export function recommended(){
-  return cache.filter(l => !l.archived && isRecommended(l))
+  return cache.filter(l => actedOn(l) || (!l.archived && isRecommended(l)))
     .sort((a, b) => (new Date(b.analyzedAt) - new Date(a.analyzedAt)) || (b.score - a.score));
 }
 
