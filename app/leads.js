@@ -35,13 +35,21 @@ export function loaded(){ return cache.length > 0; }
 export function allLeads(){ return cache; }
 export function leadById(id){ return cache.find(l => l.id === id); }
 
-function persist(){
-  // queue behind any prior write; each write PUTs the whole (current) cache
+/* Targeted writes. Sending the whole array meant a stale copy could resurrect a
+   deleted lead or undo someone else's edit; now each change touches one row. */
+function patchLead(id, fields){
   writeChain = writeChain.then(() =>
-    fetch('/data/leads', {
-      method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(cache)
+    fetch('/data/leads/' + encodeURIComponent(id), {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(fields)
     }).then(r => r.ok).catch(() => false)
+  );
+  return writeChain;
+}
+function removeLead(id){
+  writeChain = writeChain.then(() =>
+    fetch('/data/leads/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(r => r.ok).catch(() => false)
   );
   return writeChain;
 }
@@ -68,7 +76,7 @@ export async function markContacted(id){
   if (!l) return false;
   l.contacted = true;
   l.contactedAt = new Date().toISOString();
-  return persist();
+  return patchLead(id, { contacted: true, contactedAt: l.contactedAt });
 }
 
 /* Promote a below-threshold lead into the inbox (or undo it). */
@@ -76,7 +84,7 @@ export async function promoteLead(id, on = true){
   const l = leadById(id);
   if (!l) return false;
   l.promoted = !!on;
-  return persist();
+  return patchLead(id, { promoted: l.promoted });
 }
 
 /* Pin a lead as a permanent feedback example that never ages out. */
@@ -84,7 +92,7 @@ export async function pinGolden(id, on = true){
   const l = leadById(id);
   if (!l) return false;
   l.golden = !!on;
-  return persist();
+  return patchLead(id, { golden: l.golden });
 }
 
 /* Delete a lead permanently from the store. Splices the cache synchronously so
@@ -92,7 +100,7 @@ export async function pinGolden(id, on = true){
 export async function deleteLead(id){
   const i = cache.findIndex(l => l.id === id);
   if (i >= 0) cache.splice(i, 1);
-  return persist();
+  return removeLead(id);
 }
 
 /* Rate a lead — feeds future analysis runs as a few-shot example.
@@ -108,7 +116,8 @@ export async function rateLead(id, rating, note, userScore){
     l.userScore = userScore;
   }
   l.ratedAt = new Date().toISOString();
-  return persist();
+  return patchLead(id, { rating: l.rating, ratingNote: l.ratingNote, score: l.score,
+                         agentScore: l.agentScore, userScore: l.userScore, ratedAt: l.ratedAt });
 }
 
 /* POST an analysis run for an offer. maxPosts caps the batch for cheap tests. */

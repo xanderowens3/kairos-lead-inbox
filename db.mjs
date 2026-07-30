@@ -19,6 +19,7 @@ const OFFERS    = join(HERE, 'data', 'offers.json');
 const LEADS     = join(HERE, 'data', 'leads.json');
 const PROFILES  = join(HERE, 'data', 'profiles.json');
 const SCHEDULES = join(HERE, 'data', 'schedules.json');
+const RUNS      = join(HERE, 'data', 'runs.json');
 
 export const usingDb = !!process.env.DATABASE_URL;
 
@@ -55,6 +56,18 @@ export async function initDb(){
     CREATE TABLE IF NOT EXISTS profiles (
       url text PRIMARY KEY,
       data jsonb,
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS runs (
+      id text PRIMARY KEY,
+      data jsonb NOT NULL,
+      icp_name text GENERATED ALWAYS AS (data->>'icpName') STORED,
+      state text GENERATED ALWAYS AS (data->>'state') STORED,
+      started_at text GENERATED ALWAYS AS (data->>'startedAt') STORED,
+      scored text GENERATED ALWAYS AS (data->>'scored') STORED,
+      recommended text GENERATED ALWAYS AS (data->>'recommended') STORED,
+      error text GENERATED ALWAYS AS (data->>'error') STORED,
+      seq bigserial,
       updated_at timestamptz DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS schedules (
@@ -117,6 +130,15 @@ export const getLeads     = ()    => getArray('leads', LEADS);
 export const saveLeads    = arr  => saveArray('leads', LEADS, arr);
 export const getSchedules = ()    => getArray('schedules', SCHEDULES);
 export const saveSchedules= arr  => saveArray('schedules', SCHEDULES, arr);
+export const getRuns      = ()    => getArray('runs', RUNS);
+export const saveRuns     = arr  => saveArray('runs', RUNS, arr);
+
+/* Append one run to the logbook, newest last, keeping the most recent 200. */
+export async function addRun(run){
+  const all = await getRuns();
+  all.push(run);
+  return saveRuns(all.slice(-200));
+}
 
 /* ---------- profile cache (keyed by URL, null = looked-up-empty) ---------- */
 export async function getProfiles(){

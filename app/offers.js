@@ -60,11 +60,16 @@ export async function attachSearch(offerId, searchId){
   return saveOffers([...cache]);
 }
 
+/* Detaching is the one operation a whole-array save cannot express, because the
+   server never lets a PUT shrink searchIds (a stale copy used to wipe them all).
+   So removal goes through its own endpoint. */
 export async function detachSearch(offerId, searchId){
   const o = offerById(offerId);
   if (!o) return false;
   o.searchIds = (o.searchIds || []).filter(x => x !== searchId);
-  return saveOffers([...cache]);
+  const r = await fetch(`/data/offers/${encodeURIComponent(offerId)}/icps/${encodeURIComponent(searchId)}`,
+    { method: 'DELETE' });
+  return r.ok;
 }
 
 /* ---- per-ICP inbox threshold (score at/above which a lead is recommended) ---- */

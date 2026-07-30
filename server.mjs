@@ -16,7 +16,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { judgeBatch, CONCURRENCY, MODEL } from './app/qualify-core.mjs';
 import { passesExclusions } from './app/schema.js';
 import { initDb, usingDb, getOffers, saveOffers, getLeads, saveLeads,
-         getProfiles, saveProfiles, getSchedules, saveSchedules } from './db.mjs';
+         getProfiles, saveProfiles, getSchedules, saveSchedules,
+         getRuns, addRun } from './db.mjs';
 
 /* $ per million tokens [input, output]. Sonnet 5 intro pricing runs to 2026-08-31. */
 const RATES = {
@@ -155,12 +156,25 @@ function pruneOldLeads(leadsStore, offer){
    Nothing is written until every post has been scored: leads are collected in
    memory and saved in one go at the end, so a lead never appears in the inbox
    from a half-finished run. onProgress reports (done, total) for the UI. */
-async function analyzeOffer(offerId, maxPosts, onProgress){
+async function analyzeOffer(offerId, maxPosts, onProgress, runId){
   if (!anthropic) return { error: 'ANTHROPIC_API_KEY not set on the server' };
   const offers = await getOffers();
   const offer = offers.find(o => o.id === offerId);
   if (!offer) return { error: 'offer not found' };
-  if (!(offer.searchIds || []).length) return { error: 'offer has no ICPs' };
+
+  /* Which ICPs belong to this offer? offer.searchIds is client-writable and has
+     been wiped by stale whole-array saves, which silently stopped analysis. The
+     schedules are server-owned and hold the same link, so trust the union of the
+     two and heal the offer if it had drifted. */
+  const schedules = await getSchedules();
+  const fromSchedules = schedules.filter(s => s.offerId === offerId && s.searchId).map(s => s.searchId);
+  const icpIds = [...new Set([...(offer.searchIds || []), ...fromSchedules])];
+  if (!icpIds.length) return { error: 'offer has no ICPs' };
+  if (icpIds.length !== (offer.searchIds || []).length){
+    offer.searchIds = icpIds;
+    await saveOffers(offers);
+    console.log(`  healed offer "${offer.name}" → ${icpIds.length} ICP link(s) restored`);
+  }
 
   const leadsStore = await getLeads();
   const already = new Set(leadsStore.map(l => l.postId));
@@ -169,7 +183,7 @@ async function analyzeOffer(offerId, maxPosts, onProgress){
      except posts that trip a NOT keyword — the qualifier decides relevance, so we
      don't drop loose keyword matches (often the best leads) before Claude sees them. */
   const fresh = [];
-  for (const sid of offer.searchIds){
+  for (const sid of icpIds){
     const meta = (await tg('/searches/' + sid)).data;
     const rows = (await tg(`/searches/${sid}/results?limit=100`)).data ?? [];
     for (const r of rows){
@@ -240,7 +254,7 @@ async function analyzeOffer(offerId, maxPosts, onProgress){
       location: pr.location ?? null, summary: pr.summary ?? null,
       postUrl: p.content?.url, text: p.content?.text,
       publishedAt: p.published_at,
-      analyzedAt: now, model: MODEL,
+      analyzedAt: now, model: MODEL, runId: runId ?? null,
       rating: null, ratingNote: null, userScore: null,
       promoted: false, golden: false, archived: false
     });
@@ -333,6 +347,15 @@ async function runDueSchedule(sch, schedules){
     Object.assign(sch, extra || {});
     await saveSchedules(schedules);
   };
+  // every trigger is logged, success or failure, so the history is inspectable
+  const runId = 'run_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const startedAt = new Date().toISOString();
+  const log = (state, extra) => addRun({
+    id: runId, scheduleId: sch.id, icpId: sch.searchId ?? null, icpName: sch.name,
+    offerId: sch.offerId, startedAt, finishedAt: new Date().toISOString(),
+    state, scored: 0, recommended: 0, error: null, ...extra
+  }).catch(() => {});
+  sch.lastRunId = runId;
 
   // first run: create the Trigify search, attach it, and let it collect
   if (!sch.searchId){
@@ -362,7 +385,9 @@ async function runDueSchedule(sch, schedules){
 
   if (!anthropic){
     sch.lastAnalyzed = 0; sch.lastRecommended = 0;
-    await mark('error', { lastError: 'Analysis skipped — ANTHROPIC_API_KEY not set on the server' });
+    const msg = 'Analysis skipped — ANTHROPIC_API_KEY not set on the server';
+    await mark('error', { lastError: msg });
+    await log('error', { error: msg });
     console.log(`  scheduler: ANALYSIS SKIPPED for "${sch.name}" — ANTHROPIC_API_KEY not set on the server`);
     return { analyzed: 0, skipped: true };
   }
@@ -370,21 +395,24 @@ async function runDueSchedule(sch, schedules){
     await mark('analyzing', { progress: null });
     // No progress writes: an un-awaited save could land after the final
     // "ready" write and stomp the state back to analyzing, stranding the ICP.
-    const r = await analyzeOffer(sch.offerId, 0);
+    const r = await analyzeOffer(sch.offerId, 0, null, runId);
     if (r.error){                                   // e.g. offer has no ICPs
       sch.lastAnalyzed = 0; sch.lastRecommended = 0;
       await mark('error', { lastError: r.error, progress: null });
+      await log('error', { error: r.error });
       console.log(`  scheduler: analysis error for "${sch.name}": ${r.error}`);
       return { analyzed: 0, failed: true };
     }
     sch.lastAnalyzed = r.analyzed ?? 0;
     sch.lastRecommended = r.recommended ?? 0;
     await mark('ready', { lastError: null, progress: null });
+    await log('ok', { scored: r.analyzed ?? 0, recommended: r.recommended ?? 0 });
     console.log(`  scheduler: analyzed "${sch.name}" → ${r.analyzed ?? 0} posts, ${r.recommended ?? 0} recommended`);
     return { analyzed: r.analyzed ?? 0, skipped: false };
   } catch (e) {
     sch.lastAnalyzed = 0; sch.lastRecommended = 0;
     await mark('error', { lastError: e.message, progress: null });
+    await log('error', { error: e.message });
     console.log(`  scheduler: analysis failed for "${sch.name}": ${e.message}`);
     return { analyzed: 0, skipped: false, failed: true };
   }
@@ -456,13 +484,39 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
   /* ---------- offer store ---------- */
+  /* Detach one ICP from an offer. Removal is explicit and targeted: a whole-array
+     PUT can never shrink searchIds (see below), because a stale browser copy used
+     to wipe every link and silently stop analysis. */
+  const detach = url.pathname.match(/^\/data\/offers\/([^/]+)\/icps\/([^/]+)$/);
+  if (detach && req.method === 'DELETE') {
+    const [, offerId, searchId] = detach;
+    const offers = await getOffers();
+    const o = offers.find(x => x.id === offerId);
+    if (!o) return send(res, 404, JSON.stringify({ error:'offer not found' }));
+    o.searchIds = (o.searchIds || []).filter(x => x !== searchId);
+    if (o.icpThresholds) delete o.icpThresholds[searchId];
+    await saveOffers(offers);
+    return send(res, 200, JSON.stringify({ ok:true, searchIds:o.searchIds }));
+  }
+
   if (url.pathname === '/data/offers') {
     if (req.method === 'GET') return send(res, 200, JSON.stringify(await getOffers()));
     if (req.method === 'PUT') {
       const body = await readBody(req);
       if (!Array.isArray(body)) return send(res, 400, JSON.stringify({ error:'expected an array' }));
-      await saveOffers(body);
-      return send(res, 200, JSON.stringify({ ok:true, count: body.length }));
+      /* Merge rather than replace. The browser sends the whole array from a cache
+         that may predate the scheduler attaching a new ICP; accepting it verbatim
+         is what wiped the links. ICP membership only ever grows here. */
+      const byId = Object.fromEntries((await getOffers()).map(o => [o.id, o]));
+      const merged = body.map(o => {
+        const srv = byId[o.id];
+        if (!srv) return o;
+        return { ...o,
+          searchIds: [...new Set([...(srv.searchIds || []), ...(o.searchIds || [])])],
+          icpThresholds: { ...(srv.icpThresholds || {}), ...(o.icpThresholds || {}) } };
+      });
+      await saveOffers(merged);
+      return send(res, 200, JSON.stringify({ ok:true, count: merged.length }));
     }
     return send(res, 405, JSON.stringify({ error:'method not allowed' }));
   }
@@ -475,6 +529,31 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(body)) return send(res, 400, JSON.stringify({ error:'expected an array' }));
       await saveLeads(body);
       return send(res, 200, JSON.stringify({ ok:true, count: body.length }));
+    }
+    return send(res, 405, JSON.stringify({ error:'method not allowed' }));
+  }
+
+  /* Update or delete ONE lead. Rating or deleting used to rewrite the entire
+     leads array, so a stale copy could resurrect deleted leads or undo edits. */
+  const oneLead = url.pathname.match(/^\/data\/leads\/([^/]+)$/);
+  if (oneLead) {
+    const id = decodeURIComponent(oneLead[1]);
+    const leads = await getLeads();
+    const i = leads.findIndex(l => l.id === id);
+    if (i < 0) return send(res, 404, JSON.stringify({ error:'lead not found' }));
+    if (req.method === 'DELETE') {
+      leads.splice(i, 1);
+      await saveLeads(leads);
+      return send(res, 200, JSON.stringify({ ok:true }));
+    }
+    if (req.method === 'PATCH') {
+      const patch = await readBody(req);
+      if (!patch || typeof patch !== 'object') return send(res, 400, JSON.stringify({ error:'expected an object' }));
+      const ALLOWED = ['rating','ratingNote','userScore','score','agentScore','golden',
+                       'promoted','contacted','contactedAt','ratedAt','archived'];
+      for (const k of ALLOWED) if (k in patch) leads[i][k] = patch[k];
+      await saveLeads(leads);
+      return send(res, 200, JSON.stringify({ ok:true, lead: leads[i] }));
     }
     return send(res, 405, JSON.stringify({ error:'method not allowed' }));
   }
@@ -504,6 +583,10 @@ const server = createServer(async (req, res) => {
     }
     return send(res, 405, JSON.stringify({ error:'method not allowed' }));
   }
+
+  /* ---------- run logbook (read-only) ---------- */
+  if (url.pathname === '/data/runs' && req.method === 'GET')
+    return send(res, 200, JSON.stringify(await getRuns()));
 
   /* ---------- analyze ---------- */
   if (url.pathname.startsWith('/analyze/') && req.method === 'POST') {
