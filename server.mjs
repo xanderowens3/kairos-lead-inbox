@@ -440,11 +440,44 @@ async function recoverStaleRuns(){
   await saveSchedules(schedules);
 }
 
+/* Drop references to searches Trigify no longer has. Deleting an ICP in Trigify
+   used to leave a dangling link and a banner asking the user to tidy it up; the
+   server just reconciles it now. Throttled — this is housekeeping, not urgent. */
+let lastReconcile = 0;
+async function reconcileIcps(force){
+  if (!force && Date.now() - lastReconcile < 15 * 60 * 1000) return;
+  lastReconcile = Date.now();
+  let real;
+  try {
+    const rows = (await tg('/searches'))?.data;
+    if (!Array.isArray(rows)) return;             // unreadable → change nothing
+    real = new Set(rows.map(s => s.id));
+  } catch { return; }
+
+  const offers = await getOffers();
+  let changed = 0;
+  for (const o of offers){
+    const before = (o.searchIds || []).length;
+    o.searchIds = (o.searchIds || []).filter(id => real.has(id));
+    for (const k of Object.keys(o.icpThresholds || {})) if (!real.has(k)) delete o.icpThresholds[k];
+    changed += before - o.searchIds.length;
+  }
+  if (changed){ await saveOffers(offers); console.log(`  reconciled: dropped ${changed} deleted ICP link(s)`); }
+
+  const schedules = await getSchedules();
+  const keep = schedules.filter(s => !s.searchId || real.has(s.searchId));
+  if (keep.length !== schedules.length){
+    await saveSchedules(keep);
+    console.log(`  reconciled: removed ${schedules.length - keep.length} schedule(s) for deleted ICPs`);
+  }
+}
+
 let ticking = false;
 async function schedulerTick(){
   if (ticking) return;                    // never overlap runs
   ticking = true;
   try {
+    await reconcileIcps();
     const schedules = await getSchedules();
     const now = Date.now();
     let changed = false;
@@ -487,6 +520,20 @@ const server = createServer(async (req, res) => {
   /* Detach one ICP from an offer. Removal is explicit and targeted: a whole-array
      PUT can never shrink searchIds (see below), because a stale browser copy used
      to wipe every link and silently stop analysis. */
+  const attach = url.pathname.match(/^\/data\/offers\/([^/]+)\/icps$/);
+  if (attach && req.method === 'POST') {
+    const body = await readBody(req) || {};
+    if (!body.searchId) return send(res, 400, JSON.stringify({ error:'searchId required' }));
+    const offers = await getOffers();
+    const o = offers.find(x => x.id === attach[1]);
+    if (!o) return send(res, 404, JSON.stringify({ error:'offer not found' }));
+    o.searchIds = [...new Set([...(o.searchIds || []), body.searchId])];
+    if (body.minScore != null)
+      o.icpThresholds = { ...(o.icpThresholds || {}), [body.searchId]: body.minScore };
+    await saveOffers(offers);
+    return send(res, 200, JSON.stringify({ ok:true, searchIds:o.searchIds }));
+  }
+
   const detach = url.pathname.match(/^\/data\/offers\/([^/]+)\/icps\/([^/]+)$/);
   if (detach && req.method === 'DELETE') {
     const [, offerId, searchId] = detach;
@@ -504,16 +551,19 @@ const server = createServer(async (req, res) => {
     if (req.method === 'PUT') {
       const body = await readBody(req);
       if (!Array.isArray(body)) return send(res, 400, JSON.stringify({ error:'expected an array' }));
-      /* Merge rather than replace. The browser sends the whole array from a cache
-         that may predate the scheduler attaching a new ICP; accepting it verbatim
-         is what wiped the links. ICP membership only ever grows here. */
+      /* The server owns ICP membership outright. A browser save carries whatever
+         list its cache happened to hold, which could either wipe live links or
+         resurrect ones already deleted — so searchIds here is ignored entirely.
+         Attaching and detaching go through the explicit ICP endpoints below.
+         Thresholds are client-owned, but only for ICPs that actually exist. */
       const byId = Object.fromEntries((await getOffers()).map(o => [o.id, o]));
       const merged = body.map(o => {
         const srv = byId[o.id];
         if (!srv) return o;
-        return { ...o,
-          searchIds: [...new Set([...(srv.searchIds || []), ...(o.searchIds || [])])],
-          icpThresholds: { ...(srv.icpThresholds || {}), ...(o.icpThresholds || {}) } };
+        const searchIds = srv.searchIds || [];
+        const thresholds = { ...(srv.icpThresholds || {}), ...(o.icpThresholds || {}) };
+        for (const k of Object.keys(thresholds)) if (!searchIds.includes(k)) delete thresholds[k];
+        return { ...o, searchIds, icpThresholds: thresholds };
       });
       await saveOffers(merged);
       return send(res, 200, JSON.stringify({ ok:true, count: merged.length }));
@@ -645,6 +695,9 @@ server.listen(PORT, HOST, () => {
   console.log(`  analysis: ${anthropic ? 'ready (' + MODEL + ')' : 'DISABLED — ANTHROPIC_API_KEY not set'}`);
   // scheduler: check every minute for ICPs whose run time has arrived
   setInterval(schedulerTick, 60 * 1000);
-  recoverStaleRuns().then(schedulerTick).catch(e => console.log('  recover failed:', e.message));
+  recoverStaleRuns()
+    .then(() => reconcileIcps(true))       // clean dead ICP links at boot
+    .then(schedulerTick)
+    .catch(e => console.log('  startup failed:', e.message));
   console.log(`  scheduler: on (checks every 60s)\n`);
 });

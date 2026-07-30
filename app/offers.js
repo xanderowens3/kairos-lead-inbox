@@ -53,11 +53,17 @@ export async function removeOffer(id){
   return saveOffers(cache.filter(o => o.id !== id));
 }
 
-export async function attachSearch(offerId, searchId){
+/* ICP membership is server-owned — a whole-array save carries whatever the
+   browser cached, which could wipe live links or resurrect deleted ones. Both
+   attach and detach therefore go through their own endpoints. */
+export async function attachSearch(offerId, searchId, minScore){
   const o = offerById(offerId);
-  if (!o) return false;
-  o.searchIds = [...new Set([...(o.searchIds || []), searchId])];
-  return saveOffers([...cache]);
+  if (o) o.searchIds = [...new Set([...(o.searchIds || []), searchId])];
+  const r = await fetch(`/data/offers/${encodeURIComponent(offerId)}/icps`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ searchId, minScore })
+  });
+  return r.ok;
 }
 
 /* Detaching is the one operation a whole-array save cannot express, because the

@@ -165,7 +165,6 @@ export async function renderOffer(id){
   const pending = mySchedules.filter(s => !s.searchId);          // not yet created → own card
   const schedBySearch = {};                                       // created → attached to its ICP row
   mySchedules.forEach(s => { if (s.searchId) schedBySearch[s.searchId] = s; });
-  const missing = (o.searchIds || []).length - mine.length;
   const r = readiness(o);
   const bullets = (arr, neg, pos) => (arr||[]).filter(Boolean).length
     ? `<ul class="bullets ${neg?'neg':''}${pos?'pos':''}">${arr.filter(Boolean).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`
@@ -234,9 +233,6 @@ export async function renderOffer(id){
           ? `<div class="icp-unit has-sched">${ctx.rowHTML(s)}${scheduleStripHTML(sc)}</div>`
           : ctx.rowHTML(s);
       }).join('')}
-      ${missing ? `<div class="none-box warnbox">${missing} ICP${missing===1?' was':'s were'}
-        deleted in Trigify and no longer exist${missing===1?'s':''}.
-        <button class="linkbtn" id="tidy">Remove from this offer</button></div>` : ''}
     </div></div>`;
 
   $('#back').addEventListener('click', renderOffers);
@@ -257,19 +253,6 @@ export async function renderOffer(id){
     ctx.toast(created ? 'Schedule stopped' : 'Schedule cancelled');
     renderOffer(id);
   }));
-  $('#tidy')?.addEventListener('click', async () => {
-    // Never act on an empty/failed Trigify fetch — that used to remove EVERY ICP
-    // and silently stop analysis. Detach only searches Trigify confirms are gone.
-    if (!ctx.searches.length){
-      ctx.toast('Could not reach Trigify — not changing anything', true);
-      return;
-    }
-    const live = new Set(ctx.searches.map(s => s.id));
-    const gone = (o.searchIds || []).filter(x => !live.has(x));
-    for (const sid of gone) await detachSearch(id, sid);
-    ctx.toast(gone.length ? `Removed ${gone.length} deleted ICP${gone.length===1?'':'s'}` : 'Nothing to remove');
-    renderOffer(id);
-  });
   $('#delOffer').addEventListener('click', async () => {
     const ok = await confirmDialog({
       title: `Delete "${esc(o.name)}"?`,

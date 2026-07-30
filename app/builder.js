@@ -405,10 +405,7 @@ async function create(){
   if (ok){
     const id = body?.data?.id;
     const back = currentOffer;
-    if (back && id){
-      await attachSearch(back, id);
-      await setThreshold(id, minScore);      // the inbox bar chosen during creation
-    }
+    if (back && id) await attachSearch(back, id, minScore);   // link + inbox bar in one write
     toast('ICP created');
     s = blank(); sched = defaultSched(); minScore = DEFAULT_MIN_SCORE;
     await loadSearches(); loadCredits();
