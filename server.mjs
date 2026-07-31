@@ -17,7 +17,7 @@ import { judgeBatch, CONCURRENCY, MODEL } from './app/qualify-core.mjs';
 import { passesExclusions } from './app/schema.js';
 import { initDb, usingDb, getOffers, saveOffers, getLeads, saveLeads,
          getProfiles, saveProfiles, getSchedules, saveSchedules,
-         getRuns, addRun } from './db.mjs';
+         getRuns, addRun, acquireSchedulerLease, releaseSchedulerLease } from './db.mjs';
 
 /* $ per million tokens [input, output]. Sonnet 5 intro pricing runs to 2026-08-31. */
 const RATES = {
@@ -472,9 +472,24 @@ async function reconcileIcps(force){
   }
 }
 
+/* Identifies this process to the scheduler lease. */
+const OWNER = `${process.env.RAILWAY_DEPLOYMENT_ID || 'local'}-${process.pid}-${Date.now().toString(36)}`;
+let hadLease = null;
+
 let ticking = false;
 async function schedulerTick(){
-  if (ticking) return;                    // never overlap runs
+  if (ticking) return;                    // never overlap runs within this process
+  // …and never run alongside another process holding the lease
+  let mine = false;
+  try { mine = await acquireSchedulerLease(OWNER); }
+  catch (e) { console.log('  lease check failed:', e.message); return; }
+  if (mine !== hadLease){
+    console.log(mine ? '  scheduler: holding the lease — this process runs schedules'
+                     : '  scheduler: another process holds the lease — standing by');
+    hadLease = mine;
+  }
+  if (!mine) return;
+
   ticking = true;
   try {
     await reconcileIcps();
@@ -699,5 +714,9 @@ server.listen(PORT, HOST, () => {
     .then(() => reconcileIcps(true))       // clean dead ICP links at boot
     .then(schedulerTick)
     .catch(e => console.log('  startup failed:', e.message));
+  // hand the lease over promptly on redeploy instead of making the next
+  // container wait for it to expire
+  for (const sig of ['SIGTERM', 'SIGINT'])
+    process.on(sig, () => releaseSchedulerLease(OWNER).finally(() => process.exit(0)));
   console.log(`  scheduler: on (checks every 60s)\n`);
 });

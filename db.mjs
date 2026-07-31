@@ -58,6 +58,11 @@ export async function initDb(){
       data jsonb,
       updated_at timestamptz DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS locks (
+      id text PRIMARY KEY,
+      owner text NOT NULL,
+      expires_at timestamptz NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS runs (
       id text PRIMARY KEY,
       data jsonb NOT NULL,
@@ -132,6 +137,33 @@ export const getSchedules = ()    => getArray('schedules', SCHEDULES);
 export const saveSchedules= arr  => saveArray('schedules', SCHEDULES, arr);
 export const getRuns      = ()    => getArray('runs', RUNS);
 export const saveRuns     = arr  => saveArray('runs', RUNS, arr);
+
+/* ---------- scheduler lease ----------
+   Only one process may run the scheduler. Without this, two of them — a Railway
+   redeploy briefly overlapping, or a second server pointed at the same database —
+   both see a schedule as due and both act on it: two Trigify searches get created
+   for one ICP, and because each writes the WHOLE schedules array from its own
+   in-memory copy, whichever finishes last erases the other's run state.
+
+   The lease is taken atomically in Postgres. It is renewed on every tick and
+   outlives a long run, so a crashed holder is replaced within LEASE_MINUTES. */
+const LEASE_MINUTES = 10;
+export async function acquireSchedulerLease(owner){
+  if (!usingDb) return true;                    // single process when file-backed
+  const { rows } = await pool.query(
+    `INSERT INTO locks (id, owner, expires_at)
+     VALUES ('scheduler', $1, now() + ($2 || ' minutes')::interval)
+     ON CONFLICT (id) DO UPDATE SET owner = $1, expires_at = now() + ($2 || ' minutes')::interval
+     WHERE locks.owner = $1 OR locks.expires_at < now()
+     RETURNING owner`,
+    [owner, String(LEASE_MINUTES)]
+  );
+  return rows.length > 0;                       // no row → someone else holds it
+}
+export async function releaseSchedulerLease(owner){
+  if (!usingDb) return;
+  try { await pool.query(`DELETE FROM locks WHERE id='scheduler' AND owner=$1`, [owner]); } catch {}
+}
 
 /* Append one run to the logbook, newest last, keeping the most recent 200. */
 export async function addRun(run){
