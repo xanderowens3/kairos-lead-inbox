@@ -597,6 +597,59 @@ textarea::placeholder{color:var(--faint)}
 .verd.done{background:#EEF1F6;color:var(--muted);font-weight:700;text-transform:uppercase;
   font-size:9px;letter-spacing:.06em;padding:2px 7px}
 
+/* ─────────── WEIGHTED QUALIFIERS ─────────── */
+.wthead{float:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--muted)}
+.line.wline{display:flex;gap:8px;align-items:center}
+.line.wline input[type=text]{flex:1;min-width:0}
+.line.wline input.wt{width:66px;flex:0 0 66px;text-align:center;padding:13px 6px;
+  font-variant-numeric:tabular-nums;font-weight:700;color:var(--blue-deep);background:var(--blue-tint);
+  border-color:#C6D9F8}
+.bullets.weighted li{display:flex;align-items:flex-start;gap:9px;padding-left:0}
+.bullets.weighted li:before{display:none}
+.wchip{flex-shrink:0;min-width:24px;height:20px;border-radius:5px;display:inline-flex;
+  align-items:center;justify-content:center;font-size:11px;font-weight:800;
+  font-variant-numeric:tabular-nums;margin-top:1px}
+.wchip.pos{background:var(--green-bg);color:var(--green)}
+.wchip.neg{background:var(--red-bg);color:var(--red)}
+
+/* ─────────── SCORED EXAMPLE BANDS ─────────── */
+.eggrp{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;
+  margin:20px 0 9px;color:var(--muted)}
+.eggrp.pos{color:var(--green)} .eggrp.neg{color:var(--red)}
+.egrow{border:1px solid var(--line);border-radius:10px;margin-bottom:7px;background:var(--surface);
+  overflow:hidden;transition:border-color .14s}
+.egrow.filled{border-color:#C6D9F8}
+.egrow.open{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-glow)}
+.eghead{width:100%;display:flex;align-items:center;gap:11px;padding:10px 13px;background:none;
+  border:none;cursor:pointer;text-align:left;font-family:var(--sans)}
+.eghead:hover{background:#F7F9FC}
+.egscore{flex-shrink:0;min-width:34px;height:26px;border-radius:7px;display:inline-flex;
+  align-items:center;justify-content:center;font-family:var(--serif);font-size:14px;font-weight:700;
+  font-variant-numeric:tabular-nums;background:#EEF1F6;color:var(--muted)}
+.egscore.pos{background:var(--green-bg);color:var(--green)}
+.egscore.neg{background:var(--red-bg);color:var(--red)}
+.egsum{flex:1;min-width:0;font-size:12.5px;color:var(--muted);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.egrow.filled .egsum{color:var(--ink)}
+.egchev{flex-shrink:0;font-size:16px;color:var(--muted);width:16px;text-align:center}
+.egbody{padding:4px 13px 14px}
+.egbody label{display:block;font-size:12px;font-weight:700;color:var(--ink);margin:8px 0 6px}
+.egbody textarea{width:100%;font-family:var(--sans);font-size:13.5px;line-height:1.55;color:var(--ink);
+  background:var(--surface);border:1.5px solid #C4D2E6;border-radius:9px;padding:10px 12px;
+  outline:none;resize:vertical;transition:.15s}
+.egbody textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-glow)}
+.egcount{font-family:var(--sans);font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--muted);margin-left:8px}
+.ctx-wide{grid-column:1/-1}
+.egscale{display:flex;flex-wrap:wrap;gap:6px}
+.egchip{min-width:34px;height:28px;border-radius:7px;display:inline-flex;align-items:center;
+  justify-content:center;font-family:var(--serif);font-size:13px;font-weight:700;
+  font-variant-numeric:tabular-nums;cursor:default}
+.egchip.pos{background:var(--green-bg);color:var(--green)}
+.egchip.neg{background:var(--red-bg);color:var(--red)}
+.egchip.off{background:#F2F4F8;color:#B9C2D0}
+
 /* ─────────── ICP RUN SCHEDULING ─────────── */
 .sched-when .grid2 .field{margin-bottom:0}
 .sched-summary{font-size:13px;color:var(--ink);line-height:1.55;margin-top:16px;

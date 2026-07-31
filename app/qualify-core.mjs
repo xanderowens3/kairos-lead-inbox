@@ -19,6 +19,30 @@ export const CONCURRENCY = 5;
 
 const list = a => (a || []).filter(Boolean).map(x => '- ' + x).join('\n') || '- (none given)';
 
+/* Qualifiers/disqualifiers carry a 1–10 importance. Heaviest first, so the most
+   decisive signals are read first. Falls back to plain strings for old offers. */
+const weighted = a => {
+  const items = (a || [])
+    .map(x => typeof x === 'string' ? { text: x, weight: 5 } : x)
+    .filter(x => x?.text)
+    .sort((x, y) => (y.weight ?? 5) - (x.weight ?? 5));
+  return items.length
+    ? items.map(x => `- [importance ${x.weight ?? 5}/10] ${x.text}`).join('\n')
+    : '- (none given)';
+};
+
+/* The scored examples define the scale: a real post at each band, and why it
+   sits there. Rendered high to low so the top of the range is read first. */
+const SCORE_BANDS = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10];
+function examples(ex){
+  if (!ex) return '';
+  const rows = SCORE_BANDS
+    .filter(b => (ex[b]?.post || '').trim())
+    .map(b => `[SCORES ${b}]\nPOST: ${clean(ex[b].post)}` +
+              (ex[b].why?.trim() ? `\nWHY IT SCORES ${b}: ${clean(ex[b].why)}` : ''));
+  return rows.length ? `\n\nWORKED EXAMPLES — real posts and the score each was given\n${rows.join('\n\n')}\n` : '';
+}
+
 /* Emoji are UTF-16 surrogate PAIRS. Truncating text can cut one in half, leaving
    a lone surrogate that cannot be encoded as valid JSON — the API then rejects
    the whole batch with "no low surrogate in string". Drop any unpaired halves. */
@@ -39,7 +63,15 @@ function fbProfile(pr){
 
 /* The context the agent reads. Stable across every post in a run, so it is
    marked cacheable by the caller (≈0.1× price on cache reads). */
+/* The server reads offers straight from storage, so old-shaped ones (plain-string
+   qualifiers, the two loose example fields) must render correctly here too. */
 export function buildSystem(offer, feedback = []){
+  if (offer && !offer.scoreExamples && (offer.goodExample || offer.badExample)){
+    offer = { ...offer, scoreExamples: {
+      80: { post: offer.goodExample || '', why: '' },
+      30: { post: offer.badExample  || '', why: '' }
+    } };
+  }
   const fb = feedback.filter(f => f.text && (f.rating || f.userScore != null || f.golden));
   const fbBlock = fb.length ? `
 
@@ -80,13 +112,15 @@ the scale.
 SIGNS OF A PROBLEM THE OFFER SOLVES (raise the score when present)
 ${list(offer.pains)}
 
-QUALIFIERS — each nudges the score UP; the more that apply, the higher
-${list(offer.qualifiers)}
+QUALIFIERS — each nudges the score UP. The importance says how much it matters:
+10 is the strongest thing to look for, 1 is close to irrelevant.
+${weighted(offer.qualifiers)}
 
-DISQUALIFIERS — each nudges the score DOWN. These are penalties, not vetoes: a post
-can still be a good lead despite one of them if the other signals are strong.
-${list(offer.disqualifiers)}
-${offer.goodExample ? `\nAN EXAMPLE OF A STRONG FIT\n${clean(offer.goodExample)}\n` : ''}${offer.badExample ? `\nAN EXAMPLE THAT LOOKS CLOSE BUT IS WEAK\n${clean(offer.badExample)}\n` : ''}
+DISQUALIFIERS — each nudges the score DOWN, weighted the same way. These are
+penalties, not vetoes: a post can still be a good lead despite one of them if the
+other signals are strong.
+${weighted(offer.disqualifiers)}
+${examples(offer.scoreExamples)}
 HOW TO JUDGE
 Weigh everything into one 0–100 score. A company that fits who this is for and shows a
 reason to want outbound help scores high; each qualifier it meets lifts it further; each

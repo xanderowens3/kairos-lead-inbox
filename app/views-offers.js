@@ -2,7 +2,8 @@
    Offer views: list, detail (with its ICPs), editor
    ========================================================================== */
 import { blankOffer, loadOffers, offers, offerById, upsertOffer, removeOffer,
-         detachSearch, readiness } from './offers.js';
+         detachSearch, readiness, clampWeight, blankExamples, filledExamples,
+         NEG_BANDS, POS_BANDS, SCORE_BANDS } from './offers.js';
 import { TYPES } from './schema.js';
 import { confirmDialog } from './modal.js';
 import { loadSchedules, schedulesForOffer, cancelSchedule } from './schedules.js';
@@ -93,6 +94,7 @@ const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const pretty = v => cap(String(v).replace(/[-_]/g,' '));
 
 let draft = null;
+const openEg = new Set();        // which score-band example slots are expanded
 let ctx = null;          // injected from builder.js: { go, toast, searches, loadSearches, del, toggle, pull, resultsHTML }
 
 export function initOffers(c){ ctx = c; }
@@ -169,6 +171,13 @@ export async function renderOffer(id){
   const bullets = (arr, neg, pos) => (arr||[]).filter(Boolean).length
     ? `<ul class="bullets ${neg?'neg':''}${pos?'pos':''}">${arr.filter(Boolean).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`
     : `<p class="none">Not set</p>`;
+  /* weighted list — heaviest signals first, since that is what drives the score */
+  const wBullets = (arr, neg) => {
+    const items = (arr || []).filter(x => x?.text).sort((a,b) => b.weight - a.weight);
+    if (!items.length) return `<p class="none">Not set</p>`;
+    return `<ul class="bullets ${neg?'neg':'pos'} weighted">${items.map(x =>
+      `<li><span class="wchip ${neg?'neg':'pos'}">${clampWeight(x.weight)}</span>${esc(x.text)}</li>`).join('')}</ul>`;
+  };
 
   const main = $('#main');
   main.dataset.view = 'offer';
@@ -198,18 +207,20 @@ export async function renderOffer(id){
         <div class="ctx-grid">
           <div><h3>Who it is for</h3>
             <p class="prose">${esc(o.icpText) || '<span class="none">Not set</span>'}</p></div>
-          <div><h3>Problems it removes</h3>${bullets(o.pains)}</div>
-          <div><h3>ICP qualifiers</h3>${bullets(o.qualifiers, false, true)}</div>
-          <div><h3>ICP disqualifiers</h3>${bullets(o.disqualifiers, true)}</div>
-          ${(o.goodExample || o.badExample) ? `
-          <div><h3>Worked examples</h3>
-            ${o.goodExample?`<div class="eg good"><b>A fit</b>${esc(o.goodExample)}</div>`:''}
-            ${o.badExample?`<div class="eg bad"><b>A near-miss</b>${esc(o.badExample)}</div>`:''}
+          <div><h3>Problems you solve for your customers</h3>${bullets(o.pains)}</div>
+          <div><h3>ICP qualifiers</h3>${wBullets(o.qualifiers, false)}</div>
+          <div><h3>ICP disqualifiers</h3>${wBullets(o.disqualifiers, true)}</div>
+          ${filledExamples(o) ? `
+          <div class="ctx-wide"><h3>Worked examples <span class="egcount">${filledExamples(o)} of ${SCORE_BANDS.length} bands</span></h3>
+            <div class="egscale">${SCORE_BANDS.map(b => {
+              const e = o.scoreExamples?.[b] || {};
+              const on = !!(e.post||'').trim();
+              return `<div class="egchip ${on ? (b>=60?'pos':'neg') : 'off'}" title="${on?esc((e.why||e.post).slice(0,120)):'No example'}">${b}</div>`;
+            }).join('')}</div>
           </div>` : `
           <div><h3>Worked examples</h3>
-            <p class="none">None yet — the single biggest lever on accuracy.
-              One post you would contact and one you would not teaches the boundary
-              better than any amount of description.</p></div>`}
+            <p class="none">None yet — this is what defines the scale. A real post at each
+              level teaches the difference between a 40 and an 80 better than any description.</p></div>`}
         </div>
       </div>
 
@@ -281,6 +292,41 @@ export function renderEditor(){
     <div class="line"><input type="text" data-lk="${key}" data-i="${i}" value="${esc(v)}"
       placeholder="${esc(ph)}"><button class="x" data-lx="${key}" data-i="${i}">&times;</button></div>`).join('');
 
+  /* qualifiers and disqualifiers carry a 1–10 weight alongside the text */
+  const wLines = (key, ph) => {
+    const arr = o[key]?.length ? o[key] : [{ text:'', weight:5 }];
+    return arr.map((v,i) => `
+      <div class="line wline">
+        <input type="text" data-lk="${key}" data-i="${i}" value="${esc(v.text)}" placeholder="${esc(ph)}">
+        <input type="number" class="wt" data-wk="${key}" data-i="${i}" min="1" max="10" step="1"
+          value="${clampWeight(v.weight)}" aria-label="Importance from 1 to 10">
+        <button class="x" data-lx="${key}" data-i="${i}">&times;</button>
+      </div>`).join('');
+  };
+
+  /* one collapsible slot per score band, so the scale is defined by real posts */
+  const egRow = b => {
+    const e = o.scoreExamples?.[b] || { post:'', why:'' };
+    const filled = !!(e.post || '').trim();
+    const open = openEg.has(String(b));
+    const preview = filled ? esc(e.post.replace(/\s+/g,' ').slice(0,64)) + '…' : 'Empty';
+    return `<div class="egrow${filled?' filled':''}${open?' open':''}">
+      <button type="button" class="eghead" data-egtoggle="${b}">
+        <span class="egscore ${b>=60?'pos':'neg'}">${b}</span>
+        <span class="egsum">${preview}</span>
+        <span class="egchev">${open?'&minus;':'+'}</span>
+      </button>
+      ${open ? `<div class="egbody">
+        <label>The post</label>
+        <textarea data-eg="${b}" data-f="post" rows="4"
+          placeholder="Paste the post exactly as it appeared…">${esc(e.post)}</textarea>
+        <label>Why this is a ${b}</label>
+        <textarea data-eg="${b}" data-f="why" rows="3"
+          placeholder="Who posted it matters as much as what it says — say what tips it to ${b}…">${esc(e.why)}</textarea>
+      </div>` : ''}
+    </div>`;
+  };
+
   const main = $('#main');
   main.dataset.view = 'editor';
   main.innerHTML = `
@@ -303,29 +349,34 @@ export function renderEditor(){
         <textarea id="o_icp" rows="5" placeholder="Founders and managing directors of digital marketing agencies with 5 to 40 staff…">${esc(o.icpText)}</textarea>
         <p class="hint">Write freely. Anything you would tell a new salesperson on their first day belongs here.</p></div>
 
-      <div class="field"><label>Problems you remove</label>
+      <div class="field"><label>Problems you solve for your customers</label>
         <div class="lines" id="pains">${lines('pains','Delivery crowds out new business entirely')}</div>
         <button class="add" data-add="pains">+ Add another</button>
         <p class="hint">In the words a buyer would use, not the words you would sell against them.</p></div>
 
-      <div class="field"><label>ICP qualifiers</label>
-        <div class="lines" id="qual">${lines('qualifiers','Already running outbound but getting poor results')}</div>
+      <div class="field"><label>ICP qualifiers <span class="wthead">importance</span></label>
+        <div class="lines" id="qual">${wLines('qualifiers','Already running outbound but getting poor results')}</div>
         <button class="add" data-add="qualifiers">+ Add another</button>
-        <p class="hint">Signals that make a lead <b>super qualified</b> — the agent scores these higher.</p></div>
+        <p class="hint">Signals that make a lead <b>more qualified</b>. Score each <b>1&ndash;10</b> for how much
+          it should matter — 10 is the strongest thing to look for, 1 is close to irrelevant.</p></div>
 
-      <div class="field"><label>ICP disqualifiers</label>
-        <div class="lines" id="disq">${lines('disqualifiers','Anyone selling the same service — competitors')}</div>
+      <div class="field"><label>ICP disqualifiers <span class="wthead">importance</span></label>
+        <div class="lines" id="disq">${wLines('disqualifiers','Anyone selling the same service — competitors')}</div>
         <button class="add" data-add="disqualifiers">+ Add another</button>
-        <p class="hint">A post or person matching any of these is eliminated as a lead. Each rule removes a whole category of noise before you ever see it.</p></div>
+        <p class="hint">Signals that count <b>against</b> a lead. Score each <b>1&ndash;10</b> for how heavily it
+          should weigh — 10 is close to disqualifying, 1 is a mild reservation.</p></div>
 
       <div class="egbox">
-        <h3>Worked examples <span>— optional, but the biggest lever on accuracy</span></h3>
-        <p>A single example of each teaches the agent where the line sits far better than
-           description alone. Paste real posts if you have them.</p>
-        <div class="field"><label>A post you would contact</label>
-          <textarea id="o_good" rows="3" placeholder="Paste a post, and optionally why it is a fit…">${esc(o.goodExample)}</textarea></div>
-        <div class="field"><label>A post you would not — but that looks close</label>
-          <textarea id="o_bad" rows="3" placeholder="The near-misses are what the agent gets wrong…">${esc(o.badExample)}</textarea></div>
+        <h3>Worked examples <span>— what defines the scale</span></h3>
+        <p>Give the agent a real post at each level. This is what tells it the difference
+           between a 40 and an 80 — without it, scores drift toward the middle. Say <b>why</b>
+           each one sits where it does; often that is about <b>who</b> is posting, not the words.</p>
+
+        <h4 class="eggrp neg">Would not contact &middot; 10&ndash;50</h4>
+        ${NEG_BANDS.map(egRow).join('')}
+
+        <h4 class="eggrp pos">Would contact &middot; 60&ndash;100</h4>
+        ${POS_BANDS.map(egRow).join('')}
       </div>
 
       <div class="submit">
@@ -340,10 +391,18 @@ export function renderEditor(){
     o.name  = $('#o_name').value.trim();
     o.sell  = $('#o_sell').value.trim();
     o.icpText = $('#o_icp').value.trim();
-    o.goodExample = $('#o_good').value.trim();
-    o.badExample  = $('#o_bad').value.trim();
-    ['pains','qualifiers','disqualifiers'].forEach(k => {
-      o[k] = $$(`[data-lk="${k}"]`).map(i => i.value.trim());
+    o.pains = $$('[data-lk="pains"]').map(i => i.value.trim());
+    ['qualifiers','disqualifiers'].forEach(k => {
+      const weights = $$(`[data-wk="${k}"]`);
+      o[k] = $$(`[data-lk="${k}"]`).map((inp, i) => ({
+        text: inp.value.trim(), weight: clampWeight(weights[i]?.value)
+      }));
+    });
+    o.scoreExamples = o.scoreExamples || blankExamples();
+    $$('[data-eg]').forEach(t => {
+      const b = t.dataset.eg;
+      o.scoreExamples[b] = o.scoreExamples[b] || { post:'', why:'' };
+      o.scoreExamples[b][t.dataset.f] = t.value;
     });
   };
 
@@ -360,15 +419,26 @@ export function renderEditor(){
   }));
   $$('[data-lx]').forEach(b => b.addEventListener('click', () => {
     collect(); const k = b.dataset.lx;
-    o[k].splice(+b.dataset.i, 1); if (!o[k].length) o[k] = [''];
+    o[k].splice(+b.dataset.i, 1);
+    if (!o[k].length) o[k] = k === 'pains' ? [''] : [{ text:'', weight:5 }];
+    reRender();
+  }));
+  // keep weights inside 1–10 however they are typed or pasted
+  $$('[data-wk]').forEach(w => w.addEventListener('change', () => {
+    w.value = clampWeight(w.value);
+  }));
+  $$('[data-egtoggle]').forEach(b => b.addEventListener('click', () => {
+    const band = b.dataset.egtoggle;
+    collect();
+    openEg.has(band) ? openEg.delete(band) : openEg.add(band);
     reRender();
   }));
 
   $('#save').addEventListener('click', async () => {
     collect();
     o.pains = o.pains.filter(Boolean);
-    o.qualifiers = (o.qualifiers || []).filter(Boolean);
-    o.disqualifiers = o.disqualifiers.filter(Boolean);
+    o.qualifiers    = (o.qualifiers || []).filter(q => q.text);
+    o.disqualifiers = (o.disqualifiers || []).filter(q => q.text);
     o.name = o.name || 'Untitled offer';
     const ok = await upsertOffer(o);
     ctx.toast(ok ? 'Offer saved' : 'Could not save', !ok);
