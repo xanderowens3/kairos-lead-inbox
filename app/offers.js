@@ -3,8 +3,8 @@
    Persisted server-side to data/offers.json so scripts/qualify.mjs sees it too.
    ========================================================================== */
 
-/* The score bands a worked example can be pinned to. 10–50 are the posts you
-   would not contact, 60–100 the ones you would. */
+/* The score bands a worked example can be pinned to. Where the line for acting
+   on a lead falls is the user's decision — that is what the ICP threshold sets. */
 export const NEG_BANDS = [10, 20, 30, 40, 50];
 export const POS_BANDS = [60, 70, 80, 90, 100];
 export const SCORE_BANDS = [...NEG_BANDS, ...POS_BANDS];

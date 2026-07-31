@@ -372,10 +372,10 @@ export function renderEditor(){
            between a 40 and an 80 — without it, scores drift toward the middle. Say <b>why</b>
            each one sits where it does; often that is about <b>who</b> is posting, not the words.</p>
 
-        <h4 class="eggrp neg">Would not contact &middot; 10&ndash;50</h4>
+        <h4 class="eggrp neg">Lower scores &middot; 10&ndash;50</h4>
         ${NEG_BANDS.map(egRow).join('')}
 
-        <h4 class="eggrp pos">Would contact &middot; 60&ndash;100</h4>
+        <h4 class="eggrp pos">Higher scores &middot; 60&ndash;100</h4>
         ${POS_BANDS.map(egRow).join('')}
       </div>
 
