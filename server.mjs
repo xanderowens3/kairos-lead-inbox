@@ -17,7 +17,8 @@ import { judgeBatch, CONCURRENCY, MODEL } from './app/qualify-core.mjs';
 import { passesExclusions } from './app/schema.js';
 import { initDb, usingDb, getOffers, saveOffers, getLeads, saveLeads,
          getProfiles, saveProfiles, getSchedules, saveSchedules,
-         getRuns, addRun, acquireSchedulerLease, releaseSchedulerLease } from './db.mjs';
+         getRuns, addRun, acquireSchedulerLease, releaseSchedulerLease,
+         saveOneSchedule } from './db.mjs';
 
 /* $ per million tokens [input, output]. Sonnet 5 intro pricing runs to 2026-08-31. */
 const RATES = {
@@ -345,7 +346,7 @@ async function runDueSchedule(sch, schedules){
   const mark = async (state, extra) => {          // publish run state for the UI
     sch.runState = state;
     Object.assign(sch, extra || {});
-    await saveSchedules(schedules);
+    await saveOneSchedule(sch);                  // one row, so nothing else is clobbered
   };
   // every trigger is logged, success or failure, so the history is inspectable
   const runId = 'run_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -359,14 +360,30 @@ async function runDueSchedule(sch, schedules){
 
   // first run: create the Trigify search, attach it, and let it collect
   if (!sch.searchId){
-    const id = await createSearch(sch.payload);
+    /* Belt and braces against duplicates. The lease should mean only one process
+       reaches here, but a search already carrying this ICP's name is proof one was
+       created — adopt it rather than making a second. */
+    let id = null;
+    try {
+      const existing = ((await tg('/searches'))?.data || [])
+        .filter(s => s.name === sch.payload?.name);
+      if (existing.length){
+        id = existing[0].id;
+        console.log(`  scheduler: adopting existing search for "${sch.name}" (${existing.length} found)`);
+        for (const dup of existing.slice(1)){        // clean up any earlier double-create
+          await fetch(TRIGIFY + '/searches/' + dup.id, { method:'DELETE', headers:{ 'x-api-key': KEY } });
+          console.log(`  scheduler: deleted duplicate search ${dup.id}`);
+        }
+      }
+    } catch { /* unreadable — fall through and create */ }
+    if (!id) id = await createSearch(sch.payload);
     sch.searchId = id;
     sch.status = 'active';
     sch.warming = true;
     sch.warmups = 0;
     // Persist the searchId IMMEDIATELY, before the slow wait/analysis below.
     // Otherwise a restart mid-run would see searchId=null and create a duplicate.
-    await saveSchedules(schedules);
+    await saveOneSchedule(sch);
     const offers = await getOffers();
     const off = offers.find(o => o.id === sch.offerId);
     if (off){

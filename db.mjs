@@ -135,6 +135,24 @@ export const getLeads     = ()    => getArray('leads', LEADS);
 export const saveLeads    = arr  => saveArray('leads', LEADS, arr);
 export const getSchedules = ()    => getArray('schedules', SCHEDULES);
 export const saveSchedules= arr  => saveArray('schedules', SCHEDULES, arr);
+/* Update ONE schedule. Writing the whole array meant a process holding a stale
+   copy could erase another's run state — that is how completed runs ended up
+   with no runState, no lastAnalyzed and nothing in the logbook. */
+export async function saveOneSchedule(sch){
+  if (!usingDb){
+    const all = await getSchedules();
+    const i = all.findIndex(s => s.id === sch.id);
+    i >= 0 ? all[i] = sch : all.push(sch);
+    return saveSchedules(all);
+  }
+  await pool.query(
+    `INSERT INTO schedules (id, data) VALUES ($1, $2::jsonb)
+     ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+    [sch.id, JSON.stringify(sch)]
+  );
+  return true;
+}
+
 export const getRuns      = ()    => getArray('runs', RUNS);
 export const saveRuns     = arr  => saveArray('runs', RUNS, arr);
 
