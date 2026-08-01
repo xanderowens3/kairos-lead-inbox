@@ -501,20 +501,23 @@ let hadLease = null;
 
 let ticking = false;
 async function schedulerTick(){
-  if (ticking) return;                    // never overlap runs within this process
-  // …and never run alongside another process holding the lease
-  let mine = false;
-  try { mine = await acquireSchedulerLease(OWNER); }
-  catch (e) { console.log('  lease check failed:', e.message); return; }
-  if (mine !== hadLease){
-    console.log(mine ? '  scheduler: holding the lease — this process runs schedules'
-                     : '  scheduler: another process holds the lease — standing by');
-    hadLease = mine;
-  }
-  if (!mine) return;
-
+  /* Claim the guard SYNCHRONOUSLY, before any await. Checking it and then
+     awaiting the lease left a ~100ms window in which a second tick also saw it
+     unset — both then ran the same schedule and created two Trigify searches
+     milliseconds apart. Nothing may suspend between the check and the claim. */
+  if (ticking) return;
   ticking = true;
   try {
+    let mine = false;
+    try { mine = await acquireSchedulerLease(OWNER); }
+    catch (e) { console.log('  lease check failed:', e.message); return; }
+    if (mine !== hadLease){
+      console.log(mine ? '  scheduler: holding the lease — this process runs schedules'
+                       : '  scheduler: another process holds the lease — standing by');
+      hadLease = mine;
+    }
+    if (!mine) return;
+
     await reconcileIcps();
     const schedules = await getSchedules();
     const now = Date.now();
