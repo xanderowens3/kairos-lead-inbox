@@ -59,12 +59,20 @@ function removeLead(id){
    until you delete it explicitly. */
 export const actedOn = l => l.contacted || l.rating || l.golden || l.promoted || l.userScore != null;
 
-/* All leads = everything you kept, plus the current batch's recommendations.
-   Archived leads are earlier runs: still in the store for dedup and feedback,
-   but out of this view so you only work the latest batch. */
+/* Leads from the current batch that cleared their ICP's threshold — what the
+   inbox draws from. Archived leads are earlier runs: still in the store for
+   dedup and feedback, but out of this view so you only work the latest batch. */
 export function recommended(){
-  return cache.filter(l => actedOn(l) || (!l.archived && isRecommended(l)))
+  return cache.filter(l => !l.archived && isRecommended(l))
     .sort((a, b) => (new Date(b.analyzedAt) - new Date(a.analyzedAt)) || (b.score - a.score));
+}
+
+/* All leads = the ones you actioned. Marking a lead contacted in the inbox is
+   what files it here, and it stays until you delete it — regardless of score,
+   how many batches have since run, or whether its ICP still exists. */
+export function contactedLeads(){
+  return cache.filter(l => l.contacted)
+    .sort((a, b) => new Date(b.contactedAt || b.analyzedAt) - new Date(a.contactedAt || a.analyzedAt));
 }
 
 const DAYS3 = 3 * 24 * 3600 * 1000;

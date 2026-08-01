@@ -2,8 +2,8 @@
    Inbox + Leads: a scrollable list on the left. Clicking a lead opens a
    detail panel on the right (closed until a lead is clicked).
    ========================================================================== */
-import { loadLeads, recommended, inbox, leadById, rateLead, markContacted, deleteLead,
-         pinGolden, isRecommended } from './leads.js';
+import { loadLeads, recommended, contactedLeads, inbox, leadById, rateLead, markContacted,
+         deleteLead, pinGolden, isRecommended } from './leads.js';
 import { loadOffers, thresholdFor } from './offers.js';
 import { confirmDialog } from './modal.js';
 
@@ -54,16 +54,17 @@ async function revalidate(view){
   if ($('#main')?.dataset.view === view && selectedId === null && viewSig(view) !== before) paintPage(view);
 }
 function viewSig(view){
-  const l = view === 'inbox' ? inbox() : recommended();
+  const l = view === 'inbox' ? inbox() : contactedLeads();
   return l.length + '|' + l.map(x => x.id + ':' + x.score).join(',');
 }
 
 function paintPage(view){
-  const leads = view === 'inbox' ? inbox() : recommended();
+  const leads = view === 'inbox' ? inbox() : contactedLeads();
   const title = view === 'inbox' ? 'Your <em>inbox</em>' : 'All <em>leads</em>';
   const sub = view === 'inbox'
     ? 'Recommended leads from the last 3 days, best first.'
-    : `Every recommended lead, all-time${leads.filter(l=>l.rating).length ? ` · ${leads.filter(l=>l.rating).length} rated` : ''}.`;
+    : `Leads you have marked contacted, most recent first${
+        leads.filter(l=>l.rating).length ? ` · ${leads.filter(l=>l.rating).length} rated` : ''}.`;
   selectedId = null;   // panel opens only when a lead is clicked
 
   const main = $('#main');
@@ -78,10 +79,10 @@ function paintPage(view){
       <div class="leads-list" id="leadsList">
         ${leads.length ? leads.map(l => cardHTML(l, view)).join('')
           : `<div class="empty"><img src="icons/mark.svg" alt="">
-              <div class="h">${view==='inbox'?'Nothing new':'No leads yet'}</div>
+              <div class="h">${view==='inbox'?'Nothing new':'Nothing filed yet'}</div>
               <p>${view==='inbox'
                 ? 'When analysis surfaces a lead it lands here for three days. Run analysis from an offer to get started.'
-                : 'Recommended leads accumulate here as you analyze each offer’s posts.'}</p></div>`}
+                : 'Check a lead in your inbox to mark it contacted, and it is filed here for good.'}</p></div>`}
       </div>
       <aside class="leads-panel" id="leadPanel"></aside>
     </div>`;
@@ -139,10 +140,9 @@ function cardHTML(l, view){
         <div class="lc-head">
           <span class="lc-name">${esc(l.author || 'Unknown')}</span>
           ${l.rating ? `<span class="verd ${l.rating}">${l.rating==='good'?'✓':'✕'}</span>` : ''}
-          ${l.contacted ? `<span class="verd done">contacted</span>` : ''}
         </div>
       </div>
-      <span class="lc-date">${fmtDate(l.analyzedAt)}</span>
+      <span class="lc-date">contacted ${fmtDate(l.contactedAt || l.analyzedAt)}</span>
       ${actions}
     </div>`;
   }
