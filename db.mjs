@@ -178,6 +178,28 @@ export async function acquireSchedulerLease(owner){
   );
   return rows.length > 0;                       // no row → someone else holds it
 }
+/* Claim the exclusive right to do something once, e.g. create the Trigify search
+   for one schedule. The database decides — the first caller to insert the row
+   wins and everyone else is refused, however many ticks or processes are running
+   and whatever the timing. Coordination by lock ordering kept leaving gaps; this
+   cannot, because the uniqueness of the primary key does the work. */
+export async function claimOnce(key, ttlMinutes = 30){
+  if (!usingDb) return true;
+  const { rows } = await pool.query(
+    `INSERT INTO locks (id, owner, expires_at)
+     VALUES ($1, 'claim', now() + ($2 || ' minutes')::interval)
+     ON CONFLICT (id) DO UPDATE SET expires_at = now() + ($2 || ' minutes')::interval
+     WHERE locks.expires_at < now()
+     RETURNING id`,
+    [key, String(ttlMinutes)]
+  );
+  return rows.length > 0;
+}
+export async function releaseClaim(key){
+  if (!usingDb) return;
+  try { await pool.query(`DELETE FROM locks WHERE id = $1`, [key]); } catch {}
+}
+
 export async function releaseSchedulerLease(owner){
   if (!usingDb) return;
   try { await pool.query(`DELETE FROM locks WHERE id='scheduler' AND owner=$1`, [owner]); } catch {}

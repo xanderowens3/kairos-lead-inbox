@@ -18,7 +18,7 @@ import { passesExclusions } from './app/schema.js';
 import { initDb, usingDb, getOffers, saveOffers, getLeads, saveLeads,
          getProfiles, saveProfiles, getSchedules, saveSchedules,
          getRuns, addRun, acquireSchedulerLease, releaseSchedulerLease,
-         saveOneSchedule } from './db.mjs';
+         saveOneSchedule, claimOnce, releaseClaim } from './db.mjs';
 
 /* $ per million tokens [input, output]. Sonnet 5 intro pricing runs to 2026-08-31. */
 const RATES = {
@@ -364,20 +364,31 @@ async function runDueSchedule(sch, schedules){
     /* Belt and braces against duplicates. The lease should mean only one process
        reaches here, but a search already carrying this ICP's name is proof one was
        created — adopt it rather than making a second. */
+    /* Exactly one search per schedule, decided by the database rather than by
+       timing. Whoever inserts the claim row first may create; everyone else is
+       refused outright, no matter how many ticks or processes are in play. */
+    if (!await claimOnce('create-search:' + sch.id)){
+      console.log(`  scheduler: another run already creating the search for "${sch.name}" — skipping`);
+      return { analyzed: 0, skipped: true };
+    }
     let id = null;
     try {
+      // a search already bearing this name is proof one was made — adopt it
       const existing = ((await tg('/searches'))?.data || [])
         .filter(s => s.name === sch.payload?.name);
       if (existing.length){
         id = existing[0].id;
         console.log(`  scheduler: adopting existing search for "${sch.name}" (${existing.length} found)`);
-        for (const dup of existing.slice(1)){        // clean up any earlier double-create
+        for (const dup of existing.slice(1)){
           await fetch(TRIGIFY + '/searches/' + dup.id, { method:'DELETE', headers:{ 'x-api-key': KEY } });
           console.log(`  scheduler: deleted duplicate search ${dup.id}`);
         }
       }
-    } catch { /* unreadable — fall through and create */ }
-    if (!id) id = await createSearch(sch.payload);
+      if (!id) id = await createSearch(sch.payload);
+    } catch (e) {
+      await releaseClaim('create-search:' + sch.id);   // let a later run retry
+      throw e;
+    }
     sch.searchId = id;
     sch.status = 'active';
     sch.warming = true;
@@ -521,7 +532,6 @@ async function schedulerTick(){
     await reconcileIcps();
     const schedules = await getSchedules();
     const now = Date.now();
-    let changed = false;
     for (const sch of schedules){
       if (!sch.nextRun || new Date(sch.nextRun).getTime() > now) continue;
       try {
@@ -546,9 +556,11 @@ async function schedulerTick(){
         sch.nextRun = new Date(now + 10 * 60 * 1000).toISOString();   // retry in 10 min
         console.log(`  scheduler: "${sch.name}" failed — ${e.message} (retry in 10m)`);
       }
-      changed = true;
+      /* Save just this schedule. Writing the whole array here overwrote the
+         run state that runDueSchedule had already recorded — which is why a run
+         could finish with lastRunAt set but no runState and nothing logged. */
+      await saveOneSchedule(sch);
     }
-    if (changed) await saveSchedules(schedules);
   } catch (e) {
     console.log('  scheduler tick error:', e.message);
   } finally { ticking = false; }
