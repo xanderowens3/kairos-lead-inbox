@@ -344,13 +344,20 @@ async function waitForCollection(searchId, { maxMs = 8*60*1000, pollMs = 10000, 
 
 async function runDueSchedule(sch, schedules){
   const mark = async (state, extra) => {          // publish run state for the UI
+    const from = sch.runState ?? '(none)';
     sch.runState = state;
     Object.assign(sch, extra || {});
     await saveOneSchedule(sch);                  // one row, so nothing else is clobbered
+    // Read back: distinguishes "the write never happened" from "it happened and
+    // something overwrote it" — the two look identical from the outside.
+    const saved = (await getSchedules()).find(s => s.id === sch.id)?.runState ?? '(gone)';
+    console.log(`  scheduler: "${sch.name}" ${from} -> ${state}` +
+                (saved === state ? '' : `  [WROTE ${state} BUT READ BACK ${saved}]`));
   };
   // every trigger is logged, success or failure, so the history is inspectable
   const runId = 'run_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const startedAt = new Date().toISOString();
+  sch.runStartedAt = startedAt;                  // lets a later tick judge staleness
   const log = (state, extra) => addRun({
     id: runId, scheduleId: sch.id, icpId: sch.searchId ?? null, icpName: sch.name,
     offerId: sch.offerId, startedAt, finishedAt: new Date().toISOString(),
@@ -454,19 +461,27 @@ function advance(sch){   // to the next occurrence at the ICP's frequency
   sch.nextRun = new Date(next).toISOString();
 }
 
-/* A run only lives inside this process, so nothing can still be running right
-   after a boot. Clear any state left mid-flight by a restart or a crash — and
-   re-run it now if its slot has passed, so a killed run isn't silently lost. */
-async function recoverStaleRuns(){
-  const schedules = await getSchedules();
-  const stuck = schedules.filter(s => s.runState === 'collecting' || s.runState === 'analyzing');
-  if (!stuck.length) return;
-  for (const s of stuck){
+/* Clear run states left behind by a finished or killed run.
+
+   Reaching here means nothing is executing: the ticking guard turns this tick
+   back while a run is in progress, and the lease means no other process runs
+   schedules. So a schedule still claiming to collect or analyse is stale — it
+   either finished without its final state sticking, or its container died.
+   Without this the badge sat there until the next restart, and because the ICP
+   hides its results while "in flight", the leads it had already scored stayed
+   invisible. */
+const STALE_AFTER_MS = 60 * 1000;          // grace, in case a run only just began
+async function clearStaleRunStates(schedules){
+  for (const s of schedules || await getSchedules()){
+    if (s.runState !== 'collecting' && s.runState !== 'analyzing') continue;
+    const age = s.runStartedAt ? Date.now() - new Date(s.runStartedAt).getTime() : Infinity;
+    if (age < STALE_AFTER_MS) continue;
+    console.log(`  scheduler: clearing stale "${s.runState}" on "${s.name}"` +
+                ` (started ${Number.isFinite(age) ? Math.round(age/60000) + 'm ago' : 'unknown'})`);
     s.runState = 'ready';
     s.progress = null;
-    console.log(`  scheduler: cleared stale "${s.runState}" state on "${s.name}"`);
+    await saveOneSchedule(s);
   }
-  await saveSchedules(schedules);
 }
 
 /* Drop references to searches Trigify no longer has. Deleting an ICP in Trigify
@@ -531,6 +546,7 @@ async function schedulerTick(){
 
     await reconcileIcps();
     const schedules = await getSchedules();
+    await clearStaleRunStates(schedules);      // nothing is running if we got here
     const now = Date.now();
     for (const sch of schedules){
       if (!sch.nextRun || new Date(sch.nextRun).getTime() > now) continue;
@@ -749,7 +765,7 @@ server.listen(PORT, HOST, () => {
   console.log(`  analysis: ${anthropic ? 'ready (' + MODEL + ')' : 'DISABLED — ANTHROPIC_API_KEY not set'}`);
   // scheduler: check every minute for ICPs whose run time has arrived
   setInterval(schedulerTick, 60 * 1000);
-  recoverStaleRuns()
+  clearStaleRunStates()
     .then(() => reconcileIcps(true))       // clean dead ICP links at boot
     .then(schedulerTick)
     .catch(e => console.log('  startup failed:', e.message));
