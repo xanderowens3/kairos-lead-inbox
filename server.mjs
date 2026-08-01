@@ -354,8 +354,9 @@ async function runDueSchedule(sch, schedules){
   const log = (state, extra) => addRun({
     id: runId, scheduleId: sch.id, icpId: sch.searchId ?? null, icpName: sch.name,
     offerId: sch.offerId, startedAt, finishedAt: new Date().toISOString(),
+    build: BUILD, owner: OWNER,
     state, scored: 0, recommended: 0, error: null, ...extra
-  }).catch(() => {});
+  }).catch(e => console.log('  could not write run log:', e.message));
   sch.lastRunId = runId;
 
   // first run: create the Trigify search, attach it, and let it collect
@@ -488,6 +489,11 @@ async function reconcileIcps(force){
     console.log(`  reconciled: removed ${schedules.length - keep.length} schedule(s) for deleted ICPs`);
   }
 }
+
+/* Which build this is. Recorded on every run so a failure can be attributed to a
+   specific deploy instead of guessed at — most of the confusion diagnosing the
+   duplicate-ICP problem was not knowing which code had actually been live. */
+const BUILD = (process.env.RAILWAY_GIT_COMMIT_SHA || 'local').slice(0, 7);
 
 /* Identifies this process to the scheduler lease. */
 const OWNER = `${process.env.RAILWAY_DEPLOYMENT_ID || 'local'}-${process.pid}-${Date.now().toString(36)}`;
@@ -724,6 +730,7 @@ try {
 
 server.listen(PORT, HOST, () => {
   console.log(`  Kairos → http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
+  console.log(`  build   : ${BUILD}`);
   console.log(`  analysis: ${anthropic ? 'ready (' + MODEL + ')' : 'DISABLED — ANTHROPIC_API_KEY not set'}`);
   // scheduler: check every minute for ICPs whose run time has arrived
   setInterval(schedulerTick, 60 * 1000);
